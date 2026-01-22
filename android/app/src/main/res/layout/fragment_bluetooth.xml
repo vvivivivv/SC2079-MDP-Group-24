@@ -1,14 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    tools:context=".ui.BluetoothFragment">
+    android:orientation="vertical"
+    android:padding="16dp">
 
-    <!-- TODO: Update blank fragment layout -->
     <TextView
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:text="@string/bluetooth_setup" />
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="BLUETOOTH SETUP"
+        android:textSize="18sp"
+        android:textStyle="bold" />
 
-</FrameLayout>
+    <Button
+        android:id="@+id/btnScan"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="SCAN FOR RPi" />
+
+    <ListView
+        android:id="@+id/lvDevices"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="10dp"
+        android:background="#F0F0F0" />
+
+        <!-- Log for remote messages (C.4) -->
+    <TextView
+        android:id="@+id/tvMessageLog"
+        android:layout_width="match_parent"
+        android:layout_height="150dp"
+        android:layout_marginTop="10dp"
+        android:background="#000000"
+        android:padding="5dp"
+        android:text="Waiting for messages..."
+        android:textColor="#00FF00"
+        android:fontFamily="monospace"
+        android:scrollbars="vertical" />
+</LinearLayout>
