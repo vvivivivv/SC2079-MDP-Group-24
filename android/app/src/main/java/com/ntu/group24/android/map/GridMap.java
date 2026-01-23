@@ -447,6 +447,7 @@ public class GridMap extends View {
         return new RectF(left, top, right, bottom);
     }
 
+
     public void setOnCellTapListener(OnCellTapListener listener) {
         this.cellTapListener = listener;
     }
