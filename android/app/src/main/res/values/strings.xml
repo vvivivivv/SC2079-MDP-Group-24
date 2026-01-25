@@ -1,9 +1,24 @@
 <resources>
-    <string name="app_name">android</string>
-    <!-- TODO: Remove or change this placeholder text -->
-    <string name="hello_blank_fragment">Hello blank fragment</string>
+    <string name="app_name">MDP_Group24</string>
     <string name="bluetooth_setup">Bluetooth Setup</string>
-    <string name="control_setup">Control</string>
-    <string name="unknown_device">Unknown Device</string>
+
+    <!-- Status Display (C.4, C.8) -->
+    <string name="status_format">Status: %1$s</string>
+    <string name="robot_log_format">Robot: %1$s\n</string>
+
+    <!-- Connection States -->
+    <string name="state_connected">Connected</string>
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_connecting">Connecting</string>
+    <string name="state_failed">Connection Failed</string>
+
+    <!-- Feedback Messages -->
+    <string name="msg_scanning">Scanning for RPi</string>
+    <string name="msg_reconnecting">Connection lost. Retrying in 5s</string>
     <string name="error_permission_denied">Permission Denied</string>
+    <string name="unknown_device">Unknown Device</string>
+
+    <!-- Placeholders -->
+    <string name="control_setup">Control</string>
+
 </resources>
