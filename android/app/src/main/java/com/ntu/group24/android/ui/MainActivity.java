@@ -1,6 +1,10 @@
 package com.ntu.group24.android.ui;
 
 import android.Manifest;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -9,15 +13,37 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
+import androidx.fragment.app.Fragment;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.viewpager2.widget.ViewPager2;
 import com.google.android.material.tabs.TabLayout;
 import com.google.android.material.tabs.TabLayoutMediator;
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.bluetooth.BluetoothService;
+import com.ntu.group24.android.utils.Constants;
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_CODE_PERMISSIONS = 101;
     private BluetoothService mBluetoothService;
+
+    // Message receiver integration (C.9, C.10)
+    private final BroadcastReceiver mMessageReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (Constants.INTENT_MESSAGE_RECEIVED.equals(intent.getAction())) {
+                String message = intent.getStringExtra("message");
+
+                // Link to map: relay strings starting with ROBOT/TARGET
+                if (message != null && (message.startsWith(Constants.HEADER_ROBOT) || message.startsWith(Constants.HEADER_TARGET))) {
+                    // ViewPager2 > map is the first tab
+                    Fragment fragment = getSupportFragmentManager().findFragmentByTag("f0");
+                    if (fragment instanceof MapFragment) {
+                        ((MapFragment) fragment).getGridMap().applyCommand(message);
+                    }
+                }
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,6 +69,21 @@ public class MainActivity extends AppCompatActivity {
             }
         }).attach();
     }
+
+    // Registration for integration logic
+    @Override
+    protected void onResume() {
+        super.onResume();
+        IntentFilter filter = new IntentFilter(Constants.INTENT_MESSAGE_RECEIVED);
+        LocalBroadcastManager.getInstance(this).registerReceiver(mMessageReceiver, filter);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(mMessageReceiver);
+    }
+
     public BluetoothService getBluetoothService() {
         return mBluetoothService;
     }
