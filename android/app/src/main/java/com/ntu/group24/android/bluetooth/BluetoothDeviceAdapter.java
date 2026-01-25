@@ -3,6 +3,7 @@ package com.ntu.group24.android.bluetooth;
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothDevice;
 import android.content.Context;
+import android.graphics.Color;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -46,20 +47,33 @@ public class BluetoothDeviceAdapter extends ArrayAdapter<BluetoothDevice> {
             try {
                 @SuppressLint("MissingPermission")
                 String name = device.getName();
-                if (deviceName != null) {
-                    deviceName.setText(name != null ? name : getContext().getString(R.string.unknown_device));
-                }
-            } catch (SecurityException e) {
-                if (deviceName != null) {
-                    deviceName.setText(getContext().getString(R.string.error_permission_denied));
-                }
-            }
 
-            if (deviceAddress != null) {
-                deviceAddress.setText(device.getAddress());
+                // Highlights our RPi (C.2)
+                if (name != null && name.contains("24")) {
+                    deviceName.setText(name);
+                    deviceName.setTextColor(Color.parseColor("#2E7D32"));
+                } else if (name != null) {
+                    deviceName.setText(name);
+                    deviceName.setTextColor(Color.BLACK);
+                } else {
+                    deviceName.setText(getContext().getString(R.string.unknown_device));
+                    deviceName.setTextColor(Color.GRAY);
+                }
+
+                // Show bond state (C.8)
+                @SuppressLint("MissingPermission")
+                int bondState = device.getBondState();
+                String address = device.getAddress();
+                if (bondState == BluetoothDevice.BOND_BONDED) {
+                    deviceAddress.setText(String.format("%s (PAIRED)", address));
+                } else {
+                    deviceAddress.setText(address);
+                }
+
+            } catch (SecurityException e) {
+                deviceName.setText(getContext().getString(R.string.error_permission_denied));
             }
         }
-
         return convertView;
     }
 }

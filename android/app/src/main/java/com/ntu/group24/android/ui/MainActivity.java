@@ -1,26 +1,29 @@
 package com.ntu.group24.android.ui;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
+import android.widget.Toast;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.viewpager2.widget.ViewPager2;
 import com.google.android.material.tabs.TabLayout;
 import com.google.android.material.tabs.TabLayoutMediator;
 import com.ntu.group24.android.R;
-import android.Manifest;
-import android.content.pm.PackageManager;
-import android.os.Build;
-import android.widget.Toast;
-import androidx.annotation.NonNull;
-import androidx.core.app.ActivityCompat;
-import android.util.Log;
+import com.ntu.group24.android.bluetooth.BluetoothService;
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_CODE_PERMISSIONS = 101;
+    private BluetoothService mBluetoothService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        mBluetoothService = new BluetoothService(this);
 
         // Req for bluetooth and location permissions
         checkPermissions();
@@ -40,6 +43,10 @@ public class MainActivity extends AppCompatActivity {
             }
         }).attach();
     }
+    public BluetoothService getBluetoothService() {
+        return mBluetoothService;
+    }
+
     private void checkPermissions() {
         Log.d("MainActivity", "Starting permission check...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
