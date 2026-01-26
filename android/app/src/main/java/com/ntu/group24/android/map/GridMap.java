@@ -55,15 +55,7 @@ public class GridMap extends View {
     private boolean isDragging = false;
 
     private GestureDetector gestureDetector;
-    private OnObstacleTapListener obstacleTapListener;
 
-    public interface OnObstacleTapListener {
-        void onObstacleTapped(int obstacleId);
-    }
-
-    public void setOnObstacleTapListener(OnObstacleTapListener listener) {
-        this.obstacleTapListener = listener;
-    }
 
     public GridMap(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
@@ -147,16 +139,32 @@ public class GridMap extends View {
 
             @Override
             public boolean onSingleTapUp(@NonNull MotionEvent e) {
-                Integer hit = findObstacleAt(e.getX(), e.getY());
-                if (hit != null) {
-                    if (obstacleTapListener != null) obstacleTapListener.onObstacleTapped(hit);
+                Integer hitId = findObstacleAt(e.getX(), e.getY());
+
+                if (hitId != null) {
+                    // Touch-based interaction for side selection (C.7)
+                    Obstacle o = obstacles.get(hitId);
+                    if (o != null) {
+                        // Calculate where inside the 1x1 cell the user touched
+                        // relativeX and relativeY will be between 0.0 and 1.0
+                        Obstacle.Dir newFace = getTappedFace(e.getX(), e.getY());
+                        o.setFace(newFace);
+                        invalidate();
+
+                        // Communicate to Bluetooth immediately (C.7)
+                        String msg = String.format(Locale.US, "FACE,%d,%s", hitId, newFace.name());
+                        MainActivity activity = (MainActivity) getContext();
+                        if (activity.getBluetoothService() != null) {
+                            activity.getBluetoothService().write(msg);
+                        }
+
+                        Log.d(TAG, "Obstacle " + hitId + " face set to " + newFace.name());
+                    }
                     return true;
                 }
 
                 selectedCell = pointToCellModel(e.getX(), e.getY());
                 invalidate();
-
-                // Trigger listener > MapFragment opens "Add" dialog
                 if (selectedCell != null && cellTapListener != null) {
                     cellTapListener.onCellTapped(selectedCell.x, selectedCell.y);
                 }
@@ -395,6 +403,13 @@ public class GridMap extends View {
                     }
                 } catch (Exception e) { Log.e(TAG, "Target parse error"); }
                 break;
+
+            case "FACE": // Handle incoming face updates
+                if (p.length < 3) return;
+                Integer faceId = toInt(p[1]);
+                Obstacle.Dir dir = toDir(p[2]);
+                if (faceId != null && dir != null) setObstacleFace(faceId, dir);
+                break;
         }
     }
 
@@ -406,5 +421,31 @@ public class GridMap extends View {
     private static class Cell {
         final int x, y;
         Cell(int x, int y) { this.x = x; this.y = y; }
+    }
+
+    private Obstacle.Dir getTappedFace(float touchX, float touchY) {
+        float relX = (touchX - tempRect.left) / cellSizePx;
+        float relY = (touchY - tempRect.top) / cellSizePx;
+
+        if (relY < relX && relY < (1 - relX)) return Obstacle.Dir.N;
+        if (relY > relX && relY > (1 - relX)) return Obstacle.Dir.S;
+        if (relX > relY && relX > (1 - relY)) return Obstacle.Dir.E;
+        return Obstacle.Dir.W;
+    }
+
+    private @Nullable Integer toInt(String s) {
+        try { return Integer.parseInt(s.trim()); }
+        catch (Exception e) { return null; }
+    }
+
+    private @Nullable Obstacle.Dir toDir(String s) {
+        if (s == null) return null;
+        switch (s.trim().toUpperCase(Locale.US)) {
+            case "N": return Obstacle.Dir.N;
+            case "E": return Obstacle.Dir.E;
+            case "S": return Obstacle.Dir.S;
+            case "W": return Obstacle.Dir.W;
+            default: return null;
+        }
     }
 }

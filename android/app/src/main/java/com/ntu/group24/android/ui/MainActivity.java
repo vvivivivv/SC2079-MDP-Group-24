@@ -38,7 +38,7 @@ public class MainActivity extends AppCompatActivity {
                     // ViewPager2 > map is the first tab
                     Fragment fragment = getSupportFragmentManager().findFragmentByTag("f0");
                     if (fragment instanceof MapFragment) {
-                        ((MapFragment) fragment).getGridMap().applyCommand(message);
+                        ((MapFragment) fragment).handleIncomingCommand(message);
                     }
                 }
             }

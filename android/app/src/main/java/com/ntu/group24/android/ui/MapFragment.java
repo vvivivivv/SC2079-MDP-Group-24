@@ -46,9 +46,6 @@ public class MapFragment extends Fragment {
                 showAddObstacleDialog(x, y);
             }
         });
-
-        // Tap existing obstacle for options (C.6, C.7)
-        gridMap.setOnObstacleTapListener(this::showObstacleOptionsDialog);
     }
 
     private void showAddObstacleDialog(int x0, int y0) {
@@ -84,42 +81,6 @@ public class MapFragment extends Fragment {
                 .setNegativeButton("Cancel", null).show();
     }
 
-    private void showObstacleOptionsDialog(int obstacleId) {
-        String[] options = new String[]{"Change Face", "Delete"};
-        new AlertDialog.Builder(requireContext())
-                .setTitle("Obstacle " + obstacleId)
-                .setItems(options, (dialog, which) -> {
-                    MainActivity activity = (MainActivity) requireActivity();
-                    if (which == 0) {
-                        showChangeFaceDialog(obstacleId);
-                    } else if (which == 1) {
-                        gridMap.removeObstacle(obstacleId);
-                        // Send removal command to RPi (C.6)
-                        if (activity.getBluetoothService() != null) {
-                            String msg = String.format(Locale.US, Constants.OBSTACLE_REMOVE, obstacleId);
-                            activity.getBluetoothService().write(msg);
-                        }
-                    }
-                }).show();
-    }
-
-    private void showChangeFaceDialog(int obstacleId) {
-        String[] faces = new String[]{"N", "E", "S", "W"};
-        new AlertDialog.Builder(requireContext())
-                .setTitle("Set Face")
-                .setItems(faces, (dialog, which) -> {
-                    Obstacle.Dir face = parseDir(faces[which]);
-                    gridMap.setObstacleFace(obstacleId, face);
-
-                    // Send face update (C.7)
-                    MainActivity activity = (MainActivity) requireActivity();
-                    if (activity.getBluetoothService() != null) {
-                        String msg = String.format(Locale.US, "FACE,%d,%s", obstacleId, faces[which]);
-                        activity.getBluetoothService().write(msg);
-                    }
-                }).show();
-    }
-
     private Obstacle.Dir parseDir(String s) {
         switch (s) {
             case "E": return Obstacle.Dir.E;
@@ -129,7 +90,9 @@ public class MapFragment extends Fragment {
         }
     }
 
-    public GridMap getGridMap() {
-        return gridMap;
+    public void handleIncomingCommand(String command) {
+        if (gridMap != null) {
+            gridMap.applyCommand(command);
+        }
     }
 }
