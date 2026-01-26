@@ -259,6 +259,7 @@ public class GridMap extends View {
             case MotionEvent.ACTION_MOVE:
                 if (isDragging && draggingId != null) {
                     Cell c = pointToCellModel(event.getX(), event.getY());
+                    // Only update internal coordinates if moving to a valid, free cell
                     if (c != null && !isCellOccupied(c.x, c.y, draggingId)) {
                         Obstacle o = obstacles.get(draggingId);
                         if (o != null) {
@@ -272,21 +273,42 @@ public class GridMap extends View {
 
             case MotionEvent.ACTION_UP:
                 if (isDragging && draggingId != null) {
-                    Obstacle o = obstacles.get(draggingId);
-                    if (o != null) {
-                        // Transmit ADD command when finger lifts (C.6)
-                        String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
-                                o.getId(), o.getX(), o.getY(), o.getFace().name());
+                    // 1. Check where the finger is at the moment of lifting
+                    Cell finalCell = pointToCellModel(event.getX(), event.getY());
+                    MainActivity activity = (MainActivity) getContext();
 
-                        MainActivity activity = (MainActivity) getContext();
+                    if (finalCell == null) {
+                        // Finger is outside the 20x20 grid > remove obstacle (C.6)
+                        removeObstacle(draggingId);
+
                         if (activity.getBluetoothService() != null) {
+                            // Notify RPi to remove obstacle from Algorithm map
+                            String msg = String.format(Locale.US, Constants.OBSTACLE_REMOVE, draggingId);
+                            activity.getBluetoothService().write(msg);
+                        }
+                        Log.d(TAG, "Obstacle " + draggingId + " removed (dragged out)");
+                    }
+                    else {
+                        // Positioning completed inside arena (C.6)
+                        Obstacle o = obstacles.get(draggingId);
+                        if (o != null && activity.getBluetoothService() != null) {
+                            // Final coordinates transmitted via Bluetooth
+                            String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
+                                    o.getId(), o.getX(), o.getY(), o.getFace().name());
                             activity.getBluetoothService().write(msg);
                         }
                     }
+
                     isDragging = false;
                     draggingId = null;
                     invalidate();
                 }
+                break;
+
+            case MotionEvent.ACTION_CANCEL:
+                isDragging = false;
+                draggingId = null;
+                invalidate();
                 break;
         }
         return true;
