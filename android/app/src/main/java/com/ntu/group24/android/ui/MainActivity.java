@@ -65,7 +65,8 @@ public class MainActivity extends AppCompatActivity {
             switch (position) {
                 case 0: tab.setText("MAP"); break;
                 case 1: tab.setText("CONTROLS"); break;
-                case 2: tab.setText("BLUETOOTH"); break;
+                case 2: tab.setText("COMMS"); break;
+                case 3: tab.setText("BLUETOOTH"); break;
             }
         }).attach();
     }

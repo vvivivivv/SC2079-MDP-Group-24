@@ -65,6 +65,7 @@ public class BluetoothFragment extends Fragment {
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
             if (!isAdded() || getContext() == null) return;
+            // duplicated maybe - can comment below part later
             if (Constants.INTENT_MESSAGE_RECEIVED.equals(action)) {
                 String message = intent.getStringExtra("message");
 

@@ -39,4 +39,6 @@ public class Constants {
     // Broadcast names
     public static final String INTENT_MESSAGE_RECEIVED = "com.ntu.mdp.MESSAGE_RECEIVED";
     public static final String INTENT_CONNECTION_STATUS = "com.ntu.mdp.CONNECTION_STATUS";
+    public static final String INTENT_MESSAGE_SENT = "com.ntu.mdp.MESSAGE_SENT";
+
 }
