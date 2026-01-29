@@ -1,0 +1,4 @@
+pygame
+python-tsp
+pydantic
+numpy

@@ -54,3 +54,6 @@ dkms.conf
 # debug information files
 *.dwo
 venv/
+
+__pycache__/
+*.py[cod]
