@@ -79,4 +79,35 @@
             android:text="Task 2" />
     </LinearLayout>
 
+    <!-- Testing -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="24dp">
+
+        <!-- The Reset Button -->
+        <Button
+            android:id="@+id/btnReset"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="RESET MAP"
+            android:backgroundTint="#D32F2F" /> <!-- Red for danger/reset -->
+
+        <Space
+            android:layout_width="12dp"
+            android:layout_height="1dp" />
+
+        <!-- The Local Test Button -->
+        <Button
+            android:id="@+id/btnTestMove"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="TEST C.10"
+            android:backgroundTint="#FF9800" /> <!-- Orange for testing -->
+
+    </LinearLayout>
+
 </LinearLayout>

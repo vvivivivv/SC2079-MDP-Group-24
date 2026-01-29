@@ -34,7 +34,7 @@ public class MainActivity extends AppCompatActivity {
                 String message = intent.getStringExtra("message");
 
                 // Link to map: relay strings starting with ROBOT/TARGET
-                if (message != null && (message.startsWith(Constants.HEADER_ROBOT) || message.startsWith(Constants.HEADER_TARGET))) {
+                if (message != null && (message.startsWith(Constants.HEADER_ROBOT) || message.startsWith(Constants.HEADER_TARGET) || message.equals("CLEAR"))) {
                     // ViewPager2 > map is the first tab
                     Fragment fragment = getSupportFragmentManager().findFragmentByTag("f0");
                     if (fragment instanceof MapFragment) {

@@ -410,6 +410,14 @@ public class GridMap extends View {
                 Obstacle.Dir dir = toDir(p[2]);
                 if (faceId != null && dir != null) setObstacleFace(faceId, dir);
                 break;
+
+            case "CLEAR":
+                obstacles.clear();
+                robot.setX(1); // Reset robot to start pos
+                robot.setY(1);
+                robot.setDirection("N");
+                invalidate();
+                break;
         }
     }
 
