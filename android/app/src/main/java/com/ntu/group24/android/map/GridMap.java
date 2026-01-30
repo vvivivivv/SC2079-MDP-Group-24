@@ -48,7 +48,10 @@ public class GridMap extends View {
     private float cellSizePx;
     private float originX;
     private float originY;
-
+    // Robot dragging
+    private boolean isDraggingRobot = false;
+    private int robotDragOffsetX = 0;
+    private int robotDragOffsetY = 0;
     private final Map<Integer, Obstacle> obstacles = new LinkedHashMap<>();
     private @Nullable Cell selectedCell = null;
     private @Nullable Integer draggingId = null;
@@ -260,14 +263,68 @@ public class GridMap extends View {
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+
+        // 1) If robot is being dragged, handle it and skip obstacle gestures
+        if (isDraggingRobot) {
+            switch (event.getActionMasked()) {
+
+                case MotionEvent.ACTION_MOVE: {
+                    Cell c = pointToCellModel(event.getX(), event.getY());
+                    if (c != null) {
+                        int desiredX = c.x - robotDragOffsetX;
+                        int desiredY = c.y - robotDragOffsetY;
+
+                        int maxAnchor = START_CELLS - 3; // 4-3 = 1
+                        int newX = clamp(desiredX, 0, maxAnchor);
+                        int newY = clamp(desiredY, 0, maxAnchor);
+
+                        if (isRobotWithinStartZone(newX, newY) && !robotOverlapsObstacle(newX, newY)) {
+                            robot.setX(newX);
+                            robot.setY(newY);
+                            invalidate();
+                        }
+                    }
+                    return true;
+                }
+
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL: {
+                    isDraggingRobot = false;
+                    invalidate();
+                    return true;
+                }
+            }
+            return true;
+        }
+
+        // 2) Normal flow: let gestureDetector handle taps/long-press for obstacles
         gestureDetector.onTouchEvent(event);
         if (event.getAction() == MotionEvent.ACTION_DOWN) performClick();
 
         switch (event.getActionMasked()) {
+
+            case MotionEvent.ACTION_DOWN: {
+                // Start dragging robot if finger touches robot
+                if (isTouchOnRobot(event.getX(), event.getY())) {
+                    Cell c = pointToCellModel(event.getX(), event.getY());
+                    if (c != null) {
+                        robotDragOffsetX = c.x - robot.getX();
+                        robotDragOffsetY = c.y - robot.getY();
+
+                        robotDragOffsetX = clamp(robotDragOffsetX, 0, 2);
+                        robotDragOffsetY = clamp(robotDragOffsetY, 0, 2);
+
+                        isDraggingRobot = true;
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
+                }
+                break;
+            }
+
             case MotionEvent.ACTION_MOVE:
                 if (isDragging && draggingId != null) {
                     Cell c = pointToCellModel(event.getX(), event.getY());
-                    // Only update internal coordinates if moving to a valid, free cell
                     if (c != null && !isCellOccupied(c.x, c.y, draggingId)) {
                         Obstacle o = obstacles.get(draggingId);
                         if (o != null) {
@@ -281,26 +338,19 @@ public class GridMap extends View {
 
             case MotionEvent.ACTION_UP:
                 if (isDragging && draggingId != null) {
-                    // 1. Check where the finger is at the moment of lifting
                     Cell finalCell = pointToCellModel(event.getX(), event.getY());
                     MainActivity activity = (MainActivity) getContext();
 
                     if (finalCell == null) {
-                        // Finger is outside the 20x20 grid > remove obstacle (C.6)
                         removeObstacle(draggingId);
 
                         if (activity.getBluetoothService() != null) {
-                            // Notify RPi to remove obstacle from Algorithm map
                             String msg = String.format(Locale.US, Constants.OBSTACLE_REMOVE, draggingId);
                             activity.getBluetoothService().write(msg);
                         }
-                        Log.d(TAG, "Obstacle " + draggingId + " removed (dragged out)");
-                    }
-                    else {
-                        // Positioning completed inside arena (C.6)
+                    } else {
                         Obstacle o = obstacles.get(draggingId);
                         if (o != null && activity.getBluetoothService() != null) {
-                            // Final coordinates transmitted via Bluetooth
                             String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
                                     o.getId(), o.getX(), o.getY(), o.getFace().name());
                             activity.getBluetoothService().write(msg);
@@ -319,8 +369,10 @@ public class GridMap extends View {
                 invalidate();
                 break;
         }
+
         return true;
     }
+
 
     private void computeGeometry() {
         cellSizePx = Math.min(getWidth() - 2*INSET_PX - AXIS_MARGIN_PX, getHeight() - 2*INSET_PX - AXIS_MARGIN_PX) / GRID_SIZE;
@@ -393,15 +445,24 @@ public class GridMap extends View {
                 } catch (Exception e) { Log.e(TAG, "Robot parse error"); }
                 break;
 
-            case Constants.HEADER_TARGET: // "TARGET"
+            case Constants.HEADER_TARGET: //(C.9)
                 if (p.length < 3) return;
                 try {
                     Obstacle o = obstacles.get(Integer.parseInt(p[1]));
                     if (o != null) {
                         o.setTargetId(Integer.parseInt(p[2]));
-                        invalidate(); // Refresh UI (C.9)
+
+                        // NEW: handle optional face
+                        if (p.length >= 4) {
+                            Obstacle.Dir d = toDir(p[3]);
+                            if (d != null) o.setFace(d);
+                        }
+
+                        invalidate();
                     }
-                } catch (Exception e) { Log.e(TAG, "Target parse error"); }
+                } catch (Exception e) {
+                    Log.e(TAG, "Target parse error");
+                }
                 break;
 
             case "FACE": // Handle incoming face updates
@@ -448,4 +509,37 @@ public class GridMap extends View {
             default: return null;
         }
     }
+    private boolean isTouchOnRobot(float px, float py) {
+        updateRobotRect(robot.getX(), robot.getY());
+        return robotRect.contains(px, py);
+    }
+
+    // robot must fully fit within 4x4 start zone
+    private boolean isRobotWithinStartZone(int robotX, int robotY) {
+        return robotX >= 0 && robotY >= 0
+                && (robotX + 2) < START_CELLS
+                && (robotY + 2) < START_CELLS;
+    }
+
+    private int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    // prevent robot from overlapping any obstacle cells
+    private boolean robotOverlapsObstacle(int newX, int newY) {
+        int rx1 = newX;
+        int ry1 = newY;
+        int rx2 = newX + 2;
+        int ry2 = newY + 2;
+
+        for (Obstacle o : obstacles.values()) {
+            int ox = o.getX();
+            int oy = o.getY();
+            if (ox >= rx1 && ox <= rx2 && oy >= ry1 && oy <= ry2) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 }
