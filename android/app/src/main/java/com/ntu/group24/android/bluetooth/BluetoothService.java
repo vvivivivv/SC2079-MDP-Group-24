@@ -23,8 +23,6 @@ public class BluetoothService {
     private static final String APP_NAME = "MDP_Group24";
     private final BluetoothAdapter mBluetoothAdapter;
     private final Context mContext;
-
-    private AcceptThread mAcceptThread;
     private ConnectThread mConnectThread;
     private ConnectedThread mConnectedThread;
     private BluetoothDevice mDevice;
@@ -32,7 +30,6 @@ public class BluetoothService {
     public BluetoothService(Context context) {
         this.mContext = context;
         this.mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-        start();
     }
 
     private void sendStatusBroadcast(String status) {
@@ -47,47 +44,6 @@ public class BluetoothService {
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
     }
 
-    // Thread 1: Server Mode
-    private class AcceptThread extends Thread {
-        private final BluetoothServerSocket mmServerSocket;
-
-        @SuppressLint("MissingPermission")
-        public AcceptThread() {
-            BluetoothServerSocket tmp = null;
-            try {
-                tmp = mBluetoothAdapter.listenUsingInsecureRfcommWithServiceRecord(APP_NAME, Constants.MDP_UUID);
-            } catch (IOException e) {
-                Log.e(TAG, "AcceptThread listen() failed", e);
-            }
-            mmServerSocket = tmp;
-        }
-
-        public void run() {
-            BluetoothSocket socket = null;
-            try {
-                if (mmServerSocket != null) {
-                    socket = mmServerSocket.accept();
-                }
-            } catch (IOException e) {
-                Log.e(TAG, "AcceptThread accept() failed", e);
-            }
-
-            if (socket != null) {
-                synchronized (BluetoothService.this) {
-                    manageConnectedSocket(socket, socket.getRemoteDevice());
-                }
-            }
-        }
-
-        public void cancel() {
-            try {
-                if (mmServerSocket != null) mmServerSocket.close();
-            } catch (IOException e) {
-                Log.e(TAG, "AcceptThread close() failed", e);
-            }
-        }
-    }
-
     // Thread 2: Client Mode (C.2)
     private class ConnectThread extends Thread {
         private final BluetoothSocket mmSocket;
@@ -97,7 +53,7 @@ public class BluetoothService {
             mDevice = device;
             BluetoothSocket tmp = null;
             try {
-                tmp = device.createRfcommSocketToServiceRecord(Constants.MDP_UUID);
+                tmp = device.createInsecureRfcommSocketToServiceRecord(Constants.MDP_UUID);
             } catch (IOException e) {
                 Log.e(TAG, "ConnectThread create() failed", e);
             }
@@ -168,7 +124,9 @@ public class BluetoothService {
                     Log.d(TAG, "ConnectedThread lost connection");
                     sendStatusBroadcast("Disconnected");
                     // Re-listen automatically so RPi can reconnect (C.8)
-                    BluetoothService.this.start();
+                    // edit this later - TO DO
+                    sendStatusBroadcast("Disconnected");
+
                     break;
                 }
             }
@@ -193,12 +151,13 @@ public class BluetoothService {
     }
 
     public synchronized void start() {
-        if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
-        if (mConnectedThread != null) { mConnectedThread.cancel(); mConnectedThread = null; }
-
-        if (mAcceptThread == null) {
-            mAcceptThread = new AcceptThread();
-            mAcceptThread.start();
+        if (mConnectThread != null) {
+            mConnectThread.cancel();
+            mConnectThread = null;
+        }
+        if (mConnectedThread != null) {
+            mConnectedThread.cancel();
+            mConnectedThread = null;
         }
     }
 
@@ -211,8 +170,19 @@ public class BluetoothService {
 
     private synchronized void manageConnectedSocket(BluetoothSocket socket, BluetoothDevice device) {
         mDevice = device;
-        if (mAcceptThread != null) { mAcceptThread.cancel(); mAcceptThread = null; }
-        if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
+
+        // stop any in-progress connect attempt
+        if (mConnectThread != null) {
+            mConnectThread.cancel();
+            mConnectThread = null;
+        }
+
+        // stop any existing active connection
+        if (mConnectedThread != null) {
+            mConnectedThread.cancel();
+            mConnectedThread = null;
+        }
+
         mConnectedThread = new ConnectedThread(socket);
         mConnectedThread.start();
     }
