@@ -107,18 +107,20 @@ public class BluetoothService {
         @SuppressLint("MissingPermission")
         public void run() {
             mBluetoothAdapter.cancelDiscovery();
+            sendStatusBroadcast("Connecting...");
+
             try {
+                Log.d(TAG, "Attempting connect to " + mDevice.getName() + " " + mDevice.getAddress());
                 mmSocket.connect();
+                Log.d(TAG, "Connect successful");
                 manageConnectedSocket(mmSocket, mDevice);
             } catch (IOException e) {
-                try {
-                    mmSocket.close();
-                } catch (IOException e1) {
-                    Log.e(TAG, "ConnectThread close failed during failure", e1);
-                }
+                Log.e(TAG, "Connect failed", e);
+                try { mmSocket.close(); } catch (IOException ignored) {}
                 sendStatusBroadcast("Connection Failed");
             }
         }
+
 
         public void cancel() {
             try {
