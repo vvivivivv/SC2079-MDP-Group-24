@@ -10,6 +10,8 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
+import android.widget.Toast;
+import android.widget.Button;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
@@ -27,6 +29,7 @@ public class CommunicationsFragment extends Fragment {
 
     private TextView tvLog;
     private TextView tvStatus;
+    private android.widget.EditText etInput;
 
     private final BroadcastReceiver commsReceiver = new BroadcastReceiver() {
         @Override
@@ -36,43 +39,57 @@ public class CommunicationsFragment extends Fragment {
             String action = intent.getAction();
             if (action == null) return;
 
-            if (Constants.INTENT_CONNECTION_STATUS.equals(action)) {
-                String status = intent.getStringExtra("status");
-                if (status != null && tvStatus != null) {
-                    tvStatus.setText("Status: " + status);
-
-                    if (status.equalsIgnoreCase("Connected")) {
-                        tvStatus.setBackgroundColor(Color.parseColor("#C8E6C9")); // light green
-                    } else if (status.equalsIgnoreCase("Disconnected")) {
-                        tvStatus.setBackgroundColor(Color.parseColor("#FFCDD2")); // light red
-                    } else {
-                        tvStatus.setBackgroundColor(Color.parseColor("#EEEEEE")); // neutral
-                    }
-
-                    appendLine("[STATUS] " + status);
-                }
-                return;
-            }
-
-
-            if (Constants.INTENT_MESSAGE_RECEIVED.equals(action)) {
-                String msg = intent.getStringExtra("message");
-                if (msg == null) return;
-
-                // C.4: do not spam coordinates in the comms log
-                if (msg.startsWith(Constants.HEADER_ROBOT) || msg.startsWith(Constants.HEADER_TARGET)) return;
-
-                appendLine("[RX] " + msg.trim());
-                return;
-            }
-
-            if (Constants.INTENT_MESSAGE_SENT.equals(action)) {
-                String cmd = intent.getStringExtra("message");
-                if (cmd == null) return;
-                appendLine("[TX] " + cmd.trim());
+            switch (action) {
+                case Constants.INTENT_CONNECTION_STATUS:
+                    handleStatusChange(intent);
+                    break;
+                case Constants.INTENT_MESSAGE_RECEIVED:
+                    handleMessageReceived(intent);
+                    break;
+                case Constants.INTENT_MESSAGE_SENT:
+                    handleMessageSent(intent);
+                    break;
             }
         }
     };
+
+    private void handleStatusChange(Intent intent) {
+        String status = intent.getStringExtra("status");
+        if (status != null && tvStatus != null) {
+            tvStatus.setText(getString(R.string.status_format, status));
+
+            int backgroundColor;
+            switch (status.toLowerCase()) {
+                case "connected":
+                    backgroundColor = Color.parseColor("#C8E6C9"); // light green
+                    break;
+                case "disconnected":
+                    backgroundColor = Color.parseColor("#FFCDD2"); // light red
+                    break;
+                default:
+                    backgroundColor = Color.parseColor("#EEEEEE"); // neutral
+                    break;
+            }
+            tvStatus.setBackgroundColor(backgroundColor);
+            appendLine("[STATUS] " + status);
+        }
+    }
+
+    private void handleMessageReceived(Intent intent) {
+        String msg = intent.getStringExtra("message");
+        if (msg == null) return;
+
+        // Filter out coordinates (C.4)
+        if (msg.startsWith(Constants.HEADER_ROBOT) || msg.startsWith(Constants.HEADER_TARGET)) return;
+
+        appendLine("[RX] " + msg.trim());
+    }
+
+    private void handleMessageSent(Intent intent) {
+        String cmd = intent.getStringExtra("message");
+        if (cmd == null) return;
+        appendLine("[TX] " + cmd.trim());
+    }
 
     @Nullable
     @Override
@@ -84,6 +101,25 @@ public class CommunicationsFragment extends Fragment {
         tvStatus = root.findViewById(R.id.tvCommsStatus);
 
         tvLog.setMovementMethod(new ScrollingMovementMethod());
+
+        // Send message to AMD tool (C.1)
+        etInput = root.findViewById(R.id.etInput);
+        Button btnSend = root.findViewById(R.id.btnSend);
+
+        btnSend.setOnClickListener(v -> {
+            String message = etInput.getText().toString().trim();
+            if (!message.isEmpty()) {
+                MainActivity activity = (MainActivity) getActivity();
+                if (activity != null && activity.getBluetoothService() != null) {
+                    activity.getBluetoothService().write(message);
+
+                    etInput.setText("");
+                } else {
+                    Toast.makeText(requireContext(), R.string.msg_not_connected, Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
         return root;
     }
 
@@ -118,8 +154,8 @@ public class CommunicationsFragment extends Fragment {
 
         int scrollAmount = tvLog.getLayout() == null ? 0
                 : tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
-        if (scrollAmount > 0) tvLog.scrollTo(0, scrollAmount);
-        else tvLog.scrollTo(0, 0);
+
+        tvLog.scrollTo(0, Math.max(0, scrollAmount));
     }
 
 }

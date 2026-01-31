@@ -10,12 +10,12 @@
         android:id="@+id/tvCommsStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Status: -"
-        android:textStyle="bold"
-        android:textSize="16sp"
-        android:padding="12dp"
         android:background="#EEEEEE"
-        android:textColor="#222222" />
+        android:padding="12dp"
+        android:text="@string/status_placeholder"
+        android:textColor="#222222"
+        android:textSize="16sp"
+        android:textStyle="bold" />
 
     <Space
         android:layout_width="1dp"
@@ -28,10 +28,33 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:background="#F3F3F3"
+        android:overScrollMode="always"
         android:padding="12dp"
-        android:textSize="14sp"
-        android:textColor="#222222"
         android:scrollbars="vertical"
-        android:overScrollMode="always" />
+        android:textColor="#222222"
+        android:textSize="14sp" />
+
+    <!-- Input area -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/etInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="@string/hint_message_amd"
+            android:autofillHints="none"
+            android:inputType="text" />
+
+        <Button
+            android:id="@+id/btnSend"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_send" />
+    </LinearLayout>
 
 </LinearLayout>

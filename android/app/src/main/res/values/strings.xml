@@ -11,6 +11,7 @@
     <string name="state_disconnected">Disconnected</string>
     <string name="state_connecting">Connecting</string>
     <string name="state_failed">Connection Failed</string>
+    <string name="msg_not_connected">Not connected!</string>
 
     <!-- Feedback Messages -->
     <string name="msg_scanning">Scanning for RPi</string>
@@ -18,7 +19,10 @@
     <string name="error_permission_denied">Permission Denied</string>
     <string name="unknown_device">Unknown Device</string>
 
-    <!-- Placeholders -->
+    <!-- Placeholders and Communications -->
     <string name="control_setup">Control</string>
+    <string name="status_placeholder">Status: -</string>
+    <string name="hint_message_amd">Enter Message to AMD Tool</string>
+    <string name="btn_send">SEND</string>
 
 </resources>

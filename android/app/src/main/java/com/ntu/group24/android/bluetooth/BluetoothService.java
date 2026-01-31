@@ -235,7 +235,16 @@ public class BluetoothService {
 
     public void write(String message) {
         if (mConnectedThread != null) {
+            // Send the physical bytes to the AMD Tool
             mConnectedThread.write(message.getBytes(Charset.defaultCharset()));
+
+            Intent intent = new Intent(Constants.INTENT_MESSAGE_SENT);
+            intent.putExtra("message", message);
+            LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
+
+            Log.d(TAG, "Sent message: " + message);
+        } else {
+            Log.e(TAG, "Not connected, cannot write");
         }
     }
 }
