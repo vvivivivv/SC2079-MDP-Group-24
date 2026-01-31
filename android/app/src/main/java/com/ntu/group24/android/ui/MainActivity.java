@@ -23,19 +23,17 @@ import com.ntu.group24.android.bluetooth.BluetoothService;
 import com.ntu.group24.android.utils.Constants;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "MainActivity";
     private static final int REQUEST_CODE_PERMISSIONS = 101;
     private BluetoothService mBluetoothService;
 
-    // Message receiver integration (C.9, C.10)
     private final BroadcastReceiver mMessageReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (Constants.INTENT_MESSAGE_RECEIVED.equals(intent.getAction())) {
                 String message = intent.getStringExtra("message");
 
-                // Link to map: relay strings starting with ROBOT/TARGET
                 if (message != null && (message.startsWith(Constants.HEADER_ROBOT) || message.startsWith(Constants.HEADER_TARGET))) {
-                    // ViewPager2 > map is the first tab
                     Fragment fragment = getSupportFragmentManager().findFragmentByTag("f0");
                     if (fragment instanceof MapFragment) {
                         ((MapFragment) fragment).handleIncomingCommand(message);
@@ -49,18 +47,23 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        mBluetoothService = new BluetoothService(this);
 
-        // Req for bluetooth and location permissions
+        // 1. Request permissions immediately (Android 14 requirement)
         checkPermissions();
 
-        // Initialise UI components and set adapter
+        // 2. Initialise bluetooth service (C.8)
+        try {
+            mBluetoothService = new BluetoothService(this);
+        } catch (Exception e) {
+            Log.e(TAG, "BT Service failed to start: " + e.getMessage());
+        }
+
         TabLayout tabLayout = findViewById(R.id.tab_layout);
         ViewPager2 viewPager = findViewById(R.id.view_pager);
         SectionsPagerAdapter adapter = new SectionsPagerAdapter(this);
         viewPager.setAdapter(adapter);
 
-        // Connect TabLayout and ViewPager2
+        // Connect TabLayout and ViewPager2 (Added COMMS tab)
         new TabLayoutMediator(tabLayout, viewPager, (tab, position) -> {
             switch (position) {
                 case 0: tab.setText("MAP"); break;
@@ -71,7 +74,6 @@ public class MainActivity extends AppCompatActivity {
         }).attach();
     }
 
-    // Registration for integration logic
     @Override
     protected void onResume() {
         super.onResume();
@@ -90,12 +92,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void checkPermissions() {
-        Log.d("MainActivity", "Starting permission check...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ActivityCompat.requestPermissions(this,
                     new String[]{
                             Manifest.permission.BLUETOOTH_SCAN,
                             Manifest.permission.BLUETOOTH_CONNECT,
+                            Manifest.permission.BLUETOOTH_ADVERTISE,
                             Manifest.permission.ACCESS_FINE_LOCATION,
                             Manifest.permission.ACCESS_COARSE_LOCATION
                     }, REQUEST_CODE_PERMISSIONS);
@@ -113,6 +115,7 @@ public class MainActivity extends AppCompatActivity {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this, "Permissions Granted", Toast.LENGTH_SHORT).show();
             } else {
+                // Graceful failure if permissions are denied (C.8)
                 Toast.makeText(this, "Permissions Denied! Bluetooth will not work.", Toast.LENGTH_LONG).show();
             }
         }

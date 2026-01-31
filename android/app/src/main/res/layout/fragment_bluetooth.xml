@@ -19,6 +19,12 @@
         android:layout_marginTop="10dp"
         android:text="SCAN FOR RPi" />
 
+    <Button
+        android:id="@+id/btnListen"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Start Listening (AMD)" />
+
     <ListView
         android:id="@+id/lvDevices"
         android:layout_width="match_parent"

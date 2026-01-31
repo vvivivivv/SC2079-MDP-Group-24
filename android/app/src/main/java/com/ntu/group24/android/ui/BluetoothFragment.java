@@ -110,24 +110,22 @@ public class BluetoothFragment extends Fragment {
         Button btnScan = root.findViewById(R.id.btnScan);
         btnScan.setOnClickListener(v -> startScanning());
 
-        lvNewDevices.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
-            @android.annotation.SuppressLint("MissingPermission")
-            @Override
-            public void onItemClick(android.widget.AdapterView<?> parent, View view, int position, long id) {
-                if (mBluetoothAdapter.isDiscovering()) mBluetoothAdapter.cancelDiscovery();
+        Button btnListen = root.findViewById(R.id.btnListen);
 
-                BluetoothDevice selectedDevice = mNewDevicesList.get(position);
+        btnListen.setOnClickListener(v -> {
+            MainActivity activity = (MainActivity) getActivity();
+            if (activity != null && activity.getBluetoothService() != null) {
 
-                String deviceName = selectedDevice.getName();
-                if (deviceName == null) deviceName = selectedDevice.getAddress();
+                // 1. Request Discoverability (Required for external tools to find you)
+                Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+                discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300);
+                startActivity(discoverableIntent);
 
-                MainActivity activity = (MainActivity) getActivity();
-                if (activity != null && activity.getBluetoothService() != null) {
-                    activity.getBluetoothService().connect(selectedDevice);
-                    Toast.makeText(getContext(), "Connecting to " + deviceName, Toast.LENGTH_SHORT).show();
-                } else {
-                    Log.e(TAG, "BluetoothService not initialized!");
-                }
+                // 2. Start the AcceptThread manually
+                activity.getBluetoothService().start();
+
+                tvConnectionStatus.setText("Status: Listening...");
+                Toast.makeText(getContext(), "Waiting for AMD Tool connection...", Toast.LENGTH_SHORT).show();
             }
         });
         return root;
