@@ -13,31 +13,30 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-import androidx.fragment.app.Fragment;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.viewpager2.widget.ViewPager2;
+import androidx.lifecycle.ViewModelProvider;
 import com.google.android.material.tabs.TabLayout;
 import com.google.android.material.tabs.TabLayoutMediator;
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.bluetooth.BluetoothService;
 import com.ntu.group24.android.utils.Constants;
+import com.ntu.group24.android.models.RobotViewModel;
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int REQUEST_CODE_PERMISSIONS = 101;
     private BluetoothService mBluetoothService;
+    private RobotViewModel robotViewModel;
 
     private final BroadcastReceiver mMessageReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (Constants.INTENT_MESSAGE_RECEIVED.equals(intent.getAction())) {
                 String message = intent.getStringExtra("message");
-
+                Log.d(TAG, "MainActivity received: " + message);
                 if (message != null && (message.startsWith(Constants.HEADER_ROBOT) || message.startsWith(Constants.HEADER_TARGET))) {
-                    Fragment fragment = getSupportFragmentManager().findFragmentByTag("f0");
-                    if (fragment instanceof MapFragment) {
-                        ((MapFragment) fragment).handleIncomingCommand(message);
-                    }
+                    robotViewModel.setIncomingCommand(message);
                 }
             }
         }
@@ -47,6 +46,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        robotViewModel = new ViewModelProvider(this).get(RobotViewModel.class);
 
         // 1. Request permissions immediately (Android 14 requirement)
         checkPermissions();
@@ -79,6 +79,10 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         IntentFilter filter = new IntentFilter(Constants.INTENT_MESSAGE_RECEIVED);
         LocalBroadcastManager.getInstance(this).registerReceiver(mMessageReceiver, filter);
+        if (mBluetoothService != null) {
+            mBluetoothService.start();
+            Log.d(TAG, "BluetoothService started (AcceptThread running)");
+        }
     }
 
     @Override

@@ -170,12 +170,23 @@ public class BluetoothService {
         public void run() {
             byte[] buffer = new byte[1024];
             int bytes;
+            StringBuilder readMessage = new StringBuilder();
+
             while (true) {
                 try {
                     if (mmInStream != null) {
                         bytes = mmInStream.read(buffer);
-                        String incomingMessage = new String(buffer, 0, bytes);
-                        sendMessageBroadcast(incomingMessage);
+                        String incomingChunk = new String(buffer, 0, bytes, Charset.defaultCharset());
+                        Log.d(TAG, "Raw chunk received: [" + incomingChunk + "]");
+                        readMessage.append(incomingChunk);
+
+                        if (readMessage.toString().startsWith("ROBOT")) {
+                            String robotMsg = readMessage.toString().trim();
+
+                            Log.d(TAG, "Received ROBOT without newline: " + robotMsg);
+                            sendMessageBroadcast(robotMsg);
+                            readMessage.setLength(0);
+                        }
                     }
                 } catch (IOException e) {
                     Log.e(TAG, "ConnectedThread lost connection", e);

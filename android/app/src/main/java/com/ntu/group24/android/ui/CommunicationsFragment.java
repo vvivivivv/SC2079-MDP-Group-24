@@ -16,6 +16,7 @@ import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
 import android.graphics.Color;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -79,8 +80,7 @@ public class CommunicationsFragment extends Fragment {
         String msg = intent.getStringExtra("message");
         if (msg == null) return;
 
-        // Filter out coordinates (C.4)
-        if (msg.startsWith(Constants.HEADER_ROBOT) || msg.startsWith(Constants.HEADER_TARGET)) return;
+        Log.d("CommsFragment", "Fragment received RX: " + msg);
 
         appendLine("[RX] " + msg.trim());
     }

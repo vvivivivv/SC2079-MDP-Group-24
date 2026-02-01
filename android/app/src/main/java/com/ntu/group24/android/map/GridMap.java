@@ -29,6 +29,7 @@ public class GridMap extends View {
     private static final float AXIS_MARGIN_PX = 56f;
 
     private final Robot robot = new Robot(1, 1, "N");
+    private OnRobotMovedListener robotMovedListener;
 
     // Pre-allocated objects for high-performance drawing (C.8)
     private final RectF tempRect = new RectF();
@@ -73,6 +74,15 @@ public class GridMap extends View {
     public void setOnCellTapListener(OnCellTapListener listener) {
         this.cellTapListener = listener;
     }
+
+    public interface OnRobotMovedListener {
+        void onRobotMoved(int x, int y, String direction);
+    }
+
+    public void setOnRobotMovedListener(OnRobotMovedListener listener) {
+        this.robotMovedListener = listener;
+    }
+
 
     public void removeObstacle(int id) {
         obstacles.remove(id);
@@ -221,7 +231,7 @@ public class GridMap extends View {
         // 6) Draw Robot (C.5, C.10)
         updateRobotRect(robot.getX(), robot.getY());
         canvas.drawRect(robotRect, robotPaint);
-        drawRobotFront(canvas, robotRect, robot.getDirection());
+        drawRobotTriangleFace(canvas, robotRect, robot.getDirection());
     }
 
     private void drawFaceLine(Canvas canvas, RectF rect, Obstacle.Dir face) {
@@ -231,19 +241,6 @@ public class GridMap extends View {
             case E: canvas.drawLine(rect.right - pad, rect.top + pad, rect.right - pad, rect.bottom - pad, faceLinePaint); break;
             case S: canvas.drawLine(rect.left + pad, rect.bottom - pad, rect.right - pad, rect.bottom - pad, faceLinePaint); break;
             case W: canvas.drawLine(rect.left + pad, rect.top + pad, rect.left + pad, rect.bottom - pad, faceLinePaint); break;
-        }
-    }
-
-    private void drawRobotFront(Canvas canvas, RectF rect, String dir) {
-        Paint frontPaint = new Paint();
-        frontPaint.setColor(Color.BLACK);
-        frontPaint.setStrokeWidth(12f);
-        float pad = 5f;
-        switch (dir) {
-            case "N": canvas.drawLine(rect.left + pad, rect.top + pad, rect.right - pad, rect.top + pad, frontPaint); break;
-            case "S": canvas.drawLine(rect.left + pad, rect.bottom - pad, rect.right - pad, rect.bottom - pad, frontPaint); break;
-            case "E": canvas.drawLine(rect.right - pad, rect.top + pad, rect.right - pad, rect.bottom - pad, frontPaint); break;
-            case "W": canvas.drawLine(rect.left + pad, rect.top + pad, rect.left + pad, rect.bottom - pad, frontPaint); break;
         }
     }
 
@@ -291,6 +288,7 @@ public class GridMap extends View {
                 case MotionEvent.ACTION_CANCEL: {
                     isDraggingRobot = false;
                     invalidate();
+                    notifyRobotMovement();
                     return true;
                 }
             }
@@ -310,9 +308,6 @@ public class GridMap extends View {
                     if (c != null) {
                         robotDragOffsetX = c.x - robot.getX();
                         robotDragOffsetY = c.y - robot.getY();
-
-                        robotDragOffsetX = clamp(robotDragOffsetX, 0, 2);
-                        robotDragOffsetY = clamp(robotDragOffsetY, 0, 2);
 
                         isDraggingRobot = true;
                         getParent().requestDisallowInterceptTouchEvent(true);
@@ -387,6 +382,74 @@ public class GridMap extends View {
         return new Cell(x, (GRID_SIZE - 1) - screenRow);
     }
 
+    public void moveRobotManually(String action) {
+        int x = robot.getX();
+        int y = robot.getY();
+        String dir = robot.getDirection();
+
+        // 1. Calculate potential new position
+        int nextX = x;
+        int nextY = y;
+        String nextDir = dir;
+
+        switch (action.toUpperCase(Locale.US)) {
+            case "FORWARD":
+                switch (dir) {
+                    case "N": nextY++; break;
+                    case "S": nextY--; break;
+                    case "E": nextX++; break;
+                    case "W": nextX--; break;
+                }
+                break;
+            case "BACKWARD":
+                switch (dir) {
+                    case "N": nextY--; break;
+                    case "S": nextY++; break;
+                    case "E": nextX--; break;
+                    case "W": nextX++; break;
+                }
+                break;
+            case "LEFT":
+                switch (dir) {
+                    case "N": nextDir = "W"; break;
+                    case "W": nextDir = "S"; break;
+                    case "S": nextDir = "E"; break;
+                    case "E": nextDir = "N"; break;
+                }
+                break;
+            case "RIGHT":
+                switch (dir) {
+                    case "N": nextDir = "E"; break;
+                    case "E": nextDir = "S"; break;
+                    case "S": nextDir = "W"; break;
+                    case "W": nextDir = "N"; break;
+                }
+                break;
+            default: return; // Do nothing for "NONE" or unknown
+        }
+
+        // 2. Validate Boundary (0 to 17 for a 3x3 robot)
+        nextX = clamp(nextX, 0, 17);
+        nextY = clamp(nextY, 0, 17);
+
+        // 3. Collision Detection: Don't move if the 3x3 area hits an obstacle
+        if (!robotOverlapsObstacle(nextX, nextY)) {
+            robot.setX(nextX);
+            robot.setY(nextY);
+            robot.setDirection(nextDir);
+            invalidate();
+            notifyRobotMovement();
+        } else {
+            Log.d(TAG, "Movement blocked by obstacle");
+        }
+    }
+
+    private void notifyRobotMovement() {
+        if (robotMovedListener != null) {
+            robotMovedListener.onRobotMoved(robot.getX(), robot.getY(), robot.getDirection());
+        }
+    }
+
     private @Nullable Integer findObstacleAt(float px, float py) {
         for (Obstacle o : obstacles.values()) {
             updateTempRect(o.getX(), o.getY());
@@ -435,14 +498,26 @@ public class GridMap extends View {
         String op = p[0].trim().toUpperCase(Locale.US);
 
         switch (op) {
-            case Constants.HEADER_ROBOT: // "ROBOT"
-                if (p.length < 4) return;
+            case Constants.HEADER_ROBOT:
                 try {
-                    robot.setX(Integer.parseInt(p[1]));
-                    robot.setY(Integer.parseInt(p[2]));
-                    robot.setDirection(p[3].toUpperCase(Locale.US));
-                    invalidate(); // Refresh UI (C.10)
-                } catch (Exception e) { Log.e(TAG, "Robot parse error"); }
+                    // Receive TR (Top-Right) coordinates from RPi/BT
+                    int trX = Integer.parseInt(p[1]);
+                    int trY = Integer.parseInt(p[2]);
+                    String dir = p[3].toUpperCase(Locale.US);
+
+                    // Convert TR to Anchor (Bottom-Left) for the tablet's drawing logic
+                    int anchorX = trX - 2;
+                    int anchorY = trY - 2;
+
+                    // Update and redraw
+                    robot.setX(clamp(anchorX, 0, 17));
+                    robot.setY(clamp(anchorY, 0, 17));
+                    robot.setDirection(dir);
+                    invalidate();
+
+                } catch (Exception e) {
+                    Log.e(TAG, "Robot parse error: " + e.getMessage());
+                }
                 break;
 
             case Constants.HEADER_TARGET: //(C.9)
@@ -494,6 +569,44 @@ public class GridMap extends View {
         return Obstacle.Dir.W;
     }
 
+    private void drawRobotTriangleFace(Canvas canvas, RectF rect, String dir) {
+        Paint facePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        facePaint.setColor(Color.BLACK);
+        facePaint.setStyle(Paint.Style.FILL);
+
+        Path triangle = new Path();
+        float cx = rect.centerX();
+        float cy = rect.centerY();
+
+        float pad = cellSizePx * 0.3f;
+
+        switch (dir) {
+            case "N":
+                triangle.moveTo(cx, rect.top + pad);
+                triangle.lineTo(rect.left + pad, rect.bottom - pad);
+                triangle.lineTo(rect.right - pad, rect.bottom - pad);
+                break;
+            case "S":
+                triangle.moveTo(cx, rect.bottom - pad);
+                triangle.lineTo(rect.left + pad, rect.top + pad);
+                triangle.lineTo(rect.right - pad, rect.top + pad);
+                break;
+            case "E":
+                triangle.moveTo(rect.right - pad, cy);
+                triangle.lineTo(rect.left + pad, rect.top + pad);
+                triangle.lineTo(rect.left + pad, rect.bottom - pad);
+                break;
+            case "W":
+                triangle.moveTo(rect.left + pad, cy);
+                triangle.lineTo(rect.right - pad, rect.top + pad);
+                triangle.lineTo(rect.right - pad, rect.bottom - pad);
+                break;
+        }
+
+        triangle.close();
+        canvas.drawPath(triangle, facePaint);
+    }
+
     private @Nullable Integer toInt(String s) {
         try { return Integer.parseInt(s.trim()); }
         catch (Exception e) { return null; }
@@ -527,15 +640,13 @@ public class GridMap extends View {
 
     // prevent robot from overlapping any obstacle cells
     private boolean robotOverlapsObstacle(int newX, int newY) {
-        int rx1 = newX;
-        int ry1 = newY;
         int rx2 = newX + 2;
         int ry2 = newY + 2;
 
         for (Obstacle o : obstacles.values()) {
             int ox = o.getX();
             int oy = o.getY();
-            if (ox >= rx1 && ox <= rx2 && oy >= ry1 && oy <= ry2) {
+            if (ox >= newX && ox <= rx2 && oy >= newY && oy <= ry2) {
                 return true;
             }
         }

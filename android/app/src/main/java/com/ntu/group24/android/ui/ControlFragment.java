@@ -8,21 +8,17 @@ import android.widget.Button;
 import android.widget.Toast;
 import android.content.Intent;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
-
+import androidx.lifecycle.ViewModelProvider;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.utils.Constants;
-// import com.ntu.group24.android.bluetooth.BluetoothService;
-
-import java.nio.charset.StandardCharsets;
+import com.ntu.group24.android.models.RobotViewModel;
 
 public class ControlFragment extends Fragment {
-
-    // Uncomment when BluetoothService is ready
-    // private BluetoothService btService;
+    private RobotViewModel robotViewModel;
 
     public ControlFragment() {
         // Empty public constructor
@@ -40,12 +36,7 @@ public class ControlFragment extends Fragment {
                               @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        // Uncomment when MainActivity exposes BluetoothService
-        /*
-        if (getActivity() instanceof MainActivity) {
-            btService = ((MainActivity) getActivity()).getBluetoothService();
-        }
-        */
+        robotViewModel = new ViewModelProvider(requireActivity()).get(RobotViewModel.class);
 
         Button btnForward = view.findViewById(R.id.btnForward);
         Button btnBack = view.findViewById(R.id.btnBack);
@@ -55,16 +46,37 @@ public class ControlFragment extends Fragment {
         Button btnTask2 = view.findViewById(R.id.btnTask2);
 
         // Movement controls (C.3)
-        btnForward.setOnClickListener(v -> sendCommand(Constants.MOVE_FORWARD));
-        btnBack.setOnClickListener(v -> sendCommand(Constants.MOVE_BACKWARD));
-        btnLeft.setOnClickListener(v -> sendCommand(Constants.TURN_LEFT));
-        btnRight.setOnClickListener(v -> sendCommand(Constants.TURN_RIGHT));
+        btnForward.setOnClickListener(v -> moveRobot("FORWARD"));
+        btnBack.setOnClickListener(v -> moveRobot("BACKWARD"));
+        btnLeft.setOnClickListener(v -> moveRobot("LEFT"));
+        btnRight.setOnClickListener(v -> moveRobot("RIGHT"));
 
         // Task controls
         btnTask1.setOnClickListener(v -> sendCommand(Constants.START_EXPLORATION));
         btnTask2.setOnClickListener(v -> sendCommand(Constants.START_FASTEST_PATH));
-
     }
+
+    private void moveRobot(String direction) {
+        MainActivity activity = (MainActivity) getActivity();
+        String cmd = "";
+
+        // Map to specific protocols required by the AMD tool/RPi
+        switch (direction) {
+            case "FORWARD":  cmd = "f";  break;
+            case "BACKWARD": cmd = "b";  break;
+            case "LEFT":     cmd = "tl"; break;
+            case "RIGHT":    cmd = "tr"; break;
+        }
+
+        // Send the command (f, b, tl, tr) to Bluetooth
+        if (activity != null && activity.getBluetoothService() != null && !cmd.isEmpty()) {
+            activity.getBluetoothService().write(cmd);
+        }
+
+        // Sync tablet UI via ViewModel, trigger observer in map fragment
+        robotViewModel.requestMovement(direction);
+    }
+
     private void sendCommand(String cmd) {
         // Always log it to COMMS (even if BT not connected)
         Intent i = new Intent(Constants.INTENT_MESSAGE_SENT);
