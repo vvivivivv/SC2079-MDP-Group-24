@@ -142,6 +142,23 @@ public class GridMap extends View {
 
             @Override
             public boolean onSingleTapUp(@NonNull MotionEvent e) {
+//   uncomment if tap to change robot direction needed
+//                // 0) Tap robot to rotate direction
+//                if (isPointInRobot(e.getX(), e.getY())) {
+//                    String newDir = nextRobotDir(robot.getDirection());
+//                    robot.setDirection(newDir);
+//                    invalidate();
+//
+//                    // Optional: send to RPi
+//                    MainActivity activity = (MainActivity) getContext();
+//                    if (activity.getBluetoothService() != null) {
+//                        // pick a format your RPi understands, example:
+//                        activity.getBluetoothService().write("ROBOT_DIR," + newDir);
+//                    }
+//
+//                    Log.d(TAG, "Robot direction -> " + newDir);
+//                    return true;
+//                }
                 Integer hitId = findObstacleAt(e.getX(), e.getY());
 
                 if (hitId != null) {
@@ -585,5 +602,15 @@ public class GridMap extends View {
         }
         return false;
     }
-
+    // uncomment to add tap to change robot direction
+//    private String nextRobotDir(String dir) {
+//        if (dir == null) return "N";
+//        switch (dir) {
+//            case "N": return "E";
+//            case "E": return "S";
+//            case "S": return "W";
+//            case "W": return "N";
+//            default: return "N";
+//        }
+//    }
 }
