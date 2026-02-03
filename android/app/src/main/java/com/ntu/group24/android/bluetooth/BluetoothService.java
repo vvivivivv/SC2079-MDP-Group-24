@@ -16,8 +16,8 @@ import com.ntu.group24.android.utils.Constants;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.reflect.Method;
-import java.nio.charset.Charset;
+//import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 
 public class BluetoothService {
     private static final String TAG = "BluetoothService";
@@ -29,16 +29,13 @@ public class BluetoothService {
     private ConnectThread mConnectThread;
     private ConnectedThread mConnectedThread;
     private BluetoothDevice mDevice;
+    private volatile boolean isConnected = false;
 
     public BluetoothService(Context context) {
         this.mContext = context;
         this.mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-
-        //if (mBluetoothAdapter != null && mBluetoothAdapter.isEnabled()) {
-         //   start();
-        //} else {
-         //   Log.e(TAG, "Bluetooth Adapter not available or disabled");
-        //}
+        // Start listening for incoming connections immediately (for AMD Tool)
+        start();
     }
 
     private void sendStatusBroadcast(String status) {
@@ -53,7 +50,7 @@ public class BluetoothService {
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
     }
 
-    // Thread 1: Server Mode
+    // Thread 1: Server Mode (To receive connection from AMD Tool)
     private class AcceptThread extends Thread {
         private BluetoothServerSocket mmServerSocket;
 
@@ -61,19 +58,39 @@ public class BluetoothService {
         public AcceptThread() {
             try {
                 mmServerSocket = mBluetoothAdapter.listenUsingInsecureRfcommWithServiceRecord(APP_NAME, Constants.MDP_UUID);
-            } catch (IOException | SecurityException e) {
+            } catch (IOException e) {
                 Log.e(TAG, "AcceptThread listen() failed", e);
             }
         }
 
-        public void run() {
+        /*public void run() {
             BluetoothSocket socket = null;
-            try {
-                if (mmServerSocket != null) {
-                    socket = mmServerSocket.accept();
+            while (!isConnected) {
+                try {
+                    if (mmServerSocket != null) {
+                        socket = mmServerSocket.accept();
+                    }
+                } catch (IOException e) {
+                    Log.e(TAG, "AcceptThread accept() failed", e);
+                    break;
                 }
+
+                if (socket != null) {
+                    synchronized (BluetoothService.this) {
+                        manageConnectedSocket(socket, socket.getRemoteDevice());
+                    }
+                }
+            }
+        }*/
+
+        public void run() {
+            BluetoothSocket socket;
+
+            try {
+                socket = mmServerSocket.accept();
             } catch (IOException e) {
                 Log.e(TAG, "AcceptThread accept() failed", e);
+                return;
             }
 
             if (socket != null) {
@@ -92,26 +109,19 @@ public class BluetoothService {
         }
     }
 
-    // Thread 2: Client Mode (C.2)
+    // Thread 2: Client Mode (C.2) (To initiate connection to RPi)
     private class ConnectThread extends Thread {
         private final BluetoothSocket mmSocket;
+        private final BluetoothDevice device;
 
         @SuppressLint("MissingPermission")
         public ConnectThread(BluetoothDevice device) {
-            mDevice = device;
+            this.device = device;
             BluetoothSocket tmp = null;
             try {
-                // Method 1: Standard
                 tmp = device.createInsecureRfcommSocketToServiceRecord(Constants.MDP_UUID);
             } catch (IOException e) {
-                Log.e(TAG, "Standard socket failed, trying Reflection...");
-                try {
-                    // Method 2: Reflection
-                    Method m = device.getClass().getMethod("createRfcommSocket", int.class);
-                    tmp = (BluetoothSocket) m.invoke(device, 1);
-                } catch (Exception e2) {
-                    Log.e(TAG, "Reflection socket failed", e2);
-                }
+                Log.e(TAG, "ConnectThread create() failed", e);
             }
             mmSocket = tmp;
         }
@@ -127,11 +137,15 @@ public class BluetoothService {
 
             try {
                 mmSocket.connect();
-                manageConnectedSocket(mmSocket, mDevice);
+                synchronized (BluetoothService.this) {
+                    mConnectThread = null;
+                    manageConnectedSocket(mmSocket, device);
+                }
             } catch (IOException e) {
                 Log.e(TAG, "Connect failed: " + e.getMessage());
                 try { mmSocket.close(); } catch (IOException ignored) {}
                 sendStatusBroadcast("Connection Failed");
+                //BluetoothService.this.start();
             }
         }
 
@@ -149,13 +163,12 @@ public class BluetoothService {
         private final BluetoothSocket mmSocket;
         private final InputStream mmInStream;
         private final OutputStream mmOutStream;
+        private volatile boolean running = true;
 
         public ConnectedThread(BluetoothSocket socket) {
             mmSocket = socket;
             InputStream tmpIn = null;
             OutputStream tmpOut = null;
-
-            sendStatusBroadcast("Connected");
 
             try {
                 tmpIn = socket.getInputStream();
@@ -168,31 +181,32 @@ public class BluetoothService {
         }
 
         public void run() {
+            if (mmInStream == null || mmOutStream == null) {
+                connectionLost();
+                return;
+            }
+            isConnected = true;
+            sendStatusBroadcast("Connected");
+
             byte[] buffer = new byte[1024];
-            int bytes;
-            StringBuilder readMessage = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
 
-            while (true) {
+            while (running) {
                 try {
-                    if (mmInStream != null) {
-                        bytes = mmInStream.read(buffer);
-                        String incomingChunk = new String(buffer, 0, bytes, Charset.defaultCharset());
-                        Log.d(TAG, "Raw chunk received: [" + incomingChunk + "]");
-                        readMessage.append(incomingChunk);
+                    int bytes = mmInStream.read(buffer);
+                    if (bytes == -1) { connectionLost(); break; }
 
-                        if (readMessage.toString().startsWith("ROBOT")) {
-                            String robotMsg = readMessage.toString().trim();
+                    String chunk = new String(buffer, 0, bytes, StandardCharsets.UTF_8);
+                    sb.append(chunk);
 
-                            Log.d(TAG, "Received ROBOT without newline: " + robotMsg);
-                            sendMessageBroadcast(robotMsg);
-                            readMessage.setLength(0);
-                        }
+                    int idx;
+                    while ((idx = sb.indexOf("\n")) != -1) {
+                        String line = sb.substring(0, idx).trim();
+                        sb.delete(0, idx + 1);
+                        if (!line.isEmpty()) sendMessageBroadcast(line);
                     }
                 } catch (IOException e) {
-                    Log.e(TAG, "ConnectedThread lost connection", e);
-                    sendStatusBroadcast("Disconnected");
-                    // Re-listen automatically so RPi can reconnect (C.8)
-                    BluetoothService.this.start();
+                    connectionLost();
                     break;
                 }
             }
@@ -200,62 +214,88 @@ public class BluetoothService {
 
         public void write(byte[] bytes) {
             try {
-                if (mmOutStream != null) {mmOutStream.write(bytes);}
+                mmOutStream.write(bytes);
+                mmOutStream.flush();
             } catch (IOException e) {
                 Log.e(TAG, "Write failed", e);
-                sendStatusBroadcast("Send Failed");
             }
         }
 
         public void cancel() {
-            try {
-                if (mmSocket != null) mmSocket.close();
-            } catch (IOException e) {
-                Log.e(TAG, "ConnectedThread close failed", e);
-            }
+            running = false;
+            try { mmSocket.close(); } catch (IOException e) { Log.e(TAG, "Close failed", e); }
         }
     }
 
     public synchronized void start() {
-        if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
+        /*if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
         if (mConnectedThread != null) { mConnectedThread.cancel(); mConnectedThread = null; }
+        isConnected = false;*/
+
+        Log.d(TAG, "start(): server listen only");
 
         if (mAcceptThread == null) {
             mAcceptThread = new AcceptThread();
             mAcceptThread.start();
         }
+        sendStatusBroadcast("Idle/Listening");
     }
 
     public synchronized void connect(BluetoothDevice device) {
+        // When initiating a connection, stop listening as server temporarily
         if (mAcceptThread != null) { mAcceptThread.cancel(); mAcceptThread = null; }
         if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
         if (mConnectedThread != null) { mConnectedThread.cancel(); mConnectedThread = null; }
 
         mConnectThread = new ConnectThread(device);
         mConnectThread.start();
+        sendStatusBroadcast("Connecting...");
     }
 
     private synchronized void manageConnectedSocket(BluetoothSocket socket, BluetoothDevice device) {
         mDevice = device;
         if (mAcceptThread != null) { mAcceptThread.cancel(); mAcceptThread = null; }
         if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
+        if (mConnectedThread != null) { mConnectedThread.cancel(); mConnectedThread = null; }
 
         mConnectedThread = new ConnectedThread(socket);
         mConnectedThread.start();
     }
 
-    public void write(String message) {
-        if (mConnectedThread != null) {
-            // Send the physical bytes to the AMD Tool
-            mConnectedThread.write(message.getBytes(Charset.defaultCharset()));
-
-            Intent intent = new Intent(Constants.INTENT_MESSAGE_SENT);
-            intent.putExtra("message", message);
-            LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
-
-            Log.d(TAG, "Sent message: " + message);
-        } else {
-            Log.e(TAG, "Not connected, cannot write");
+    @SuppressLint("MissingPermission")
+    public String getConnectedDeviceName() {
+        if (isConnected && mDevice != null) {
+            return mDevice.getName();
         }
+        return "None";
+    }
+
+    private synchronized void connectionLost() {
+        isConnected = false;
+        if (mConnectedThread != null) { mConnectedThread.cancel(); mConnectedThread = null; }
+        sendStatusBroadcast("Disconnected");
+        // Re-listen so RPi can reconnect (C.8)
+        start();
+    }
+
+    public void write(String message) {
+        ConnectedThread r;
+
+        synchronized (this) {
+            if (!isConnected || mConnectedThread == null) {
+                Log.e(TAG, "Not connected, cannot write");
+                return;
+            }
+            r = mConnectedThread;
+        }
+        // Send the physical bytes to the AMD Tool
+        //r.write(message.getBytes(Charset.defaultCharset()));
+        r.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+
+        Intent intent = new Intent(Constants.INTENT_MESSAGE_SENT);
+        intent.putExtra("message", message);
+        LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
+
+        Log.d(TAG, "Sent message: " + message);
     }
 }

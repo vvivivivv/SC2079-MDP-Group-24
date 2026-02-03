@@ -32,11 +32,22 @@ public class MainActivity extends AppCompatActivity {
     private final BroadcastReceiver mMessageReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (Constants.INTENT_MESSAGE_RECEIVED.equals(intent.getAction())) {
+            String action = intent.getAction();
+            if (Constants.INTENT_MESSAGE_RECEIVED.equals(action)) {
                 String message = intent.getStringExtra("message");
                 Log.d(TAG, "MainActivity received: " + message);
                 if (message != null && (message.startsWith(Constants.HEADER_ROBOT) || message.startsWith(Constants.HEADER_TARGET))) {
                     robotViewModel.setIncomingCommand(message);
+                }
+            }
+            else if (Constants.INTENT_CONNECTION_STATUS.equals(action)) {
+                String status = intent.getStringExtra("status");
+
+                if ("Connected".equals(status)) {
+                    String deviceName = mBluetoothService.getConnectedDeviceName();
+                    Toast.makeText(context, "Connected to " + deviceName, Toast.LENGTH_SHORT).show();
+                } else if ("Connection Failed".equals(status)) {
+                    Toast.makeText(context, "Connection Failed", Toast.LENGTH_SHORT).show();
                 }
             }
         }
@@ -77,12 +88,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        IntentFilter filter = new IntentFilter(Constants.INTENT_MESSAGE_RECEIVED);
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Constants.INTENT_MESSAGE_RECEIVED);
+        filter.addAction(Constants.INTENT_CONNECTION_STATUS);
         LocalBroadcastManager.getInstance(this).registerReceiver(mMessageReceiver, filter);
-        if (mBluetoothService != null) {
-            mBluetoothService.start();
-            Log.d(TAG, "BluetoothService started (AcceptThread running)");
-        }
     }
 
     @Override

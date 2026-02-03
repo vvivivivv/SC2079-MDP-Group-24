@@ -128,6 +128,38 @@ public class BluetoothFragment extends Fragment {
                 Toast.makeText(getContext(), "Waiting for AMD Tool connection...", Toast.LENGTH_SHORT).show();
             }
         });
+
+        lvNewDevices.setOnItemClickListener((parent, view, position, id) -> {
+            // Explicitly check for BLUETOOTH_CONNECT permission (Android 12+)
+            if (androidx.core.content.ContextCompat.checkSelfPermission(requireContext(),
+                    android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                    && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                Toast.makeText(getContext(), "Connect permission required", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            try {
+                // 1. Stop discovery (Crucial for connection stability)
+                if (mBluetoothAdapter.isDiscovering()) {
+                    mBluetoothAdapter.cancelDiscovery();
+                }
+
+                // 2. Get the device
+                BluetoothDevice device = mNewDevicesList.get(position);
+                String deviceName = device.getName() != null ? device.getName() : "Unknown Device";
+                Log.d(TAG, "Connecting to: " + deviceName + " [" + device.getAddress() + "]");
+
+                // 3. Initiate connection via Service
+                MainActivity activity = (MainActivity) getActivity();
+                if (activity != null && activity.getBluetoothService() != null) {
+                    tvConnectionStatus.setText("Status: Connecting...");
+                    activity.getBluetoothService().connect(device);
+                }
+            } catch (SecurityException e) {
+                Log.e(TAG, "Permission denied during connection attempt", e);
+            }
+        });
+
         return root;
     }
 
