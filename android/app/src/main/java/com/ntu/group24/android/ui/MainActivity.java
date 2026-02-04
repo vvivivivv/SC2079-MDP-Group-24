@@ -77,13 +77,17 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        IntentFilter filter = new IntentFilter(Constants.INTENT_MESSAGE_RECEIVED);
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Constants.INTENT_MESSAGE_RECEIVED);
+        filter.addAction(Constants.INTENT_CONNECTION_STATUS);
+        filter.addAction(Constants.INTENT_MESSAGE_SENT);
+
         LocalBroadcastManager.getInstance(this).registerReceiver(mMessageReceiver, filter);
-        if (mBluetoothService != null) {
-            mBluetoothService.start();
-            Log.d(TAG, "BluetoothService started (AcceptThread running)");
-        }
+
+        Log.d(TAG, "MainActivity resumed (BluetoothService ready)");
     }
+
 
     @Override
     protected void onPause() {

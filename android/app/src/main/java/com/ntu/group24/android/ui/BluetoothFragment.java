@@ -1,12 +1,14 @@
 package com.ntu.group24.android.ui;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -33,6 +35,7 @@ import java.util.ArrayList;
 
 public class BluetoothFragment extends Fragment {
     private static final String TAG = "BluetoothFragment";
+
     private BluetoothAdapter mBluetoothAdapter;
     private BluetoothDeviceAdapter mDeviceAdapter;
     private final ArrayList<BluetoothDevice> mNewDevicesList = new ArrayList<>();
@@ -40,22 +43,27 @@ public class BluetoothFragment extends Fragment {
     private ListView lvNewDevices;
     private TextView tvMessageLog;
     private TextView tvConnectionStatus;
+
     private boolean isRetrying = false;
     private final Handler reconnectionHandler = new Handler();
+
+    private boolean scanReceiverRegistered = false;
+
+    private SharedPreferences prefs;
 
     private final BroadcastReceiver mScanReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (BluetoothDevice.ACTION_FOUND.equals(intent.getAction())) {
-                try {
-                    BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                    if (device != null && !mNewDevicesList.contains(device)) {
-                        mNewDevicesList.add(device);
-                        if (mDeviceAdapter != null) mDeviceAdapter.notifyDataSetChanged();
-                    }
-                } catch (SecurityException e) {
-                    Log.e(TAG, "Discovery permission error", e);
+            if (!BluetoothDevice.ACTION_FOUND.equals(intent.getAction())) return;
+
+            try {
+                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                if (device != null && !mNewDevicesList.contains(device)) {
+                    mNewDevicesList.add(device);
+                    if (mDeviceAdapter != null) mDeviceAdapter.notifyDataSetChanged();
                 }
+            } catch (SecurityException e) {
+                Log.e(TAG, "Discovery permission error", e);
             }
         }
     };
@@ -63,34 +71,37 @@ public class BluetoothFragment extends Fragment {
     private final BroadcastReceiver mDataReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
             if (!isAdded() || getContext() == null) return;
-            // duplicated maybe - can comment below part later
+
+            String action = intent.getAction();
+            if (action == null) return;
+
             if (Constants.INTENT_MESSAGE_RECEIVED.equals(action)) {
                 String message = intent.getStringExtra("message");
 
-                // Selective info (don't log robot coordinates) (C.4)
+                // keep your “don’t spam robot coords” rule
                 if (message != null && !message.startsWith(Constants.HEADER_ROBOT)) {
                     tvMessageLog.append(getString(R.string.robot_log_format, message));
-
-                    final int scrollAmount = tvMessageLog.getLayout().getLineTop(tvMessageLog.getLineCount()) - tvMessageLog.getHeight();
+                    int scrollAmount = tvMessageLog.getLayout() == null ? 0
+                            : tvMessageLog.getLayout().getLineTop(tvMessageLog.getLineCount()) - tvMessageLog.getHeight();
                     if (scrollAmount > 0) tvMessageLog.scrollTo(0, scrollAmount);
                 }
 
             } else if (Constants.INTENT_CONNECTION_STATUS.equals(action)) {
                 String status = intent.getStringExtra("status");
+                if (status == null) return;
 
-                if (status != null) {
-                    tvConnectionStatus.setText(getString(R.string.status_format, status));
+                tvConnectionStatus.setText(getString(R.string.status_format, status));
 
-                    // Auto-reconnect logic (C.8)
-                    if (getString(R.string.state_disconnected).equals(status) && !isRetrying) {
+                // If your service broadcasts "Connected"/"Disconnected"/"Connecting..."
+                if (status.equalsIgnoreCase("Disconnected")) {
+                    if (!isRetrying) {
                         isRetrying = true;
                         attemptAutoReconnect();
-                    } else if (getString(R.string.state_connected).equals(status)) {
-                        isRetrying = false;
-                        reconnectionHandler.removeCallbacksAndMessages(null);
                     }
+                } else if (status.equalsIgnoreCase("Connected")) {
+                    isRetrying = false;
+                    reconnectionHandler.removeCallbacksAndMessages(null);
                 }
             }
         }
@@ -99,6 +110,8 @@ public class BluetoothFragment extends Fragment {
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         View root = inflater.inflate(R.layout.fragment_bluetooth, container, false);
+
+        prefs = requireContext().getSharedPreferences("app_prefs", Context.MODE_PRIVATE);
 
         mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         lvNewDevices = root.findViewById(R.id.lvDevices);
@@ -110,52 +123,126 @@ public class BluetoothFragment extends Fragment {
         Button btnScan = root.findViewById(R.id.btnScan);
         btnScan.setOnClickListener(v -> startScanning());
 
+        // Re-purpose "Listen" button to "Reconnect last device"
         Button btnListen = root.findViewById(R.id.btnListen);
+        btnListen.setOnClickListener(v -> reconnectLastDevice());
 
-        btnListen.setOnClickListener(v -> {
-            MainActivity activity = (MainActivity) getActivity();
-            if (activity != null && activity.getBluetoothService() != null) {
+        // Tap a scanned device to connect
+        lvNewDevices.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
+            @SuppressLint("MissingPermission")
+            @Override
+            public void onItemClick(android.widget.AdapterView<?> parent, View view, int position, long id) {
 
-                // 1. Request Discoverability (Required for external tools to find you)
-                Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
-                discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300);
-                startActivity(discoverableIntent);
+                // Android 12+ requires BLUETOOTH_SCAN for these calls
+                if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    if (mBluetoothAdapter != null && mBluetoothAdapter.isDiscovering()) {
+                        mBluetoothAdapter.cancelDiscovery();
+                    }
+                }
 
-                // 2. Start the AcceptThread manually
-                activity.getBluetoothService().start();
+                BluetoothDevice selectedDevice = mNewDevicesList.get(position);
 
-                tvConnectionStatus.setText("Status: Listening...");
-                Toast.makeText(getContext(), "Waiting for AMD Tool connection...", Toast.LENGTH_SHORT).show();
+                // save MAC for reconnect
+                prefs.edit().putString(Constants.PREF_LAST_CONNECTED_DEVICE, selectedDevice.getAddress()).apply();
+
+                String deviceName;
+                try {
+                    deviceName = selectedDevice.getName();
+                } catch (SecurityException e) {
+                    deviceName = null;
+                }
+                if (deviceName == null) deviceName = selectedDevice.getAddress();
+
+                MainActivity activity = (MainActivity) getActivity();
+                if (activity != null && activity.getBluetoothService() != null) {
+                    activity.getBluetoothService().connect(selectedDevice);
+                    Toast.makeText(getContext(), "Connecting to " + deviceName, Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(getContext(), "BluetoothService not ready", Toast.LENGTH_SHORT).show();
+                    Log.e(TAG, "BluetoothService not initialized!");
+                }
             }
         });
+
+
+        // init adapter once
+        mDeviceAdapter = new BluetoothDeviceAdapter(requireContext(), R.layout.item_bluetooth_device, mNewDevicesList);
+        lvNewDevices.setAdapter(mDeviceAdapter);
+
         return root;
+    }
+
+    private void reconnectLastDevice() {
+        String lastMac = prefs.getString(Constants.PREF_LAST_CONNECTED_DEVICE, null);
+        if (lastMac == null) {
+            Toast.makeText(getContext(), "No saved device to reconnect", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (mBluetoothAdapter == null) {
+            Toast.makeText(getContext(), "Bluetooth not supported", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(lastMac);
+
+            MainActivity activity = (MainActivity) getActivity();
+            if (activity != null && activity.getBluetoothService() != null) {
+                activity.getBluetoothService().connect(device);
+                Toast.makeText(getContext(), "Reconnecting to " + lastMac, Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(getContext(), "BluetoothService not ready", Toast.LENGTH_SHORT).show();
+            }
+        } catch (IllegalArgumentException e) {
+            Toast.makeText(getContext(), "Saved MAC invalid", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void attemptAutoReconnect() {
         if (!isAdded()) return;
-        Toast.makeText(getContext(), R.string.msg_reconnecting, Toast.LENGTH_SHORT).show();
-        reconnectionHandler.postDelayed(() -> {
-            if (isRetrying && isAdded()) {
-                MainActivity activity = (MainActivity) getActivity();
-                if (activity != null && activity.getBluetoothService() != null) {
-                    activity.getBluetoothService().start();
-                }
-            }
-        }, 5000);
-    }
 
-    @android.annotation.SuppressLint("MissingPermission")
-    private void startScanning() {
-        // Check if permissions are granted before calling bluetooth methods (C.8)
-        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+        String lastMac = prefs.getString(Constants.PREF_LAST_CONNECTED_DEVICE, null);
+        if (lastMac == null) {
+            isRetrying = false;
             return;
         }
+
+        Toast.makeText(getContext(), R.string.msg_reconnecting, Toast.LENGTH_SHORT).show();
+
+        reconnectionHandler.postDelayed(() -> {
+            if (!isRetrying || !isAdded()) return;
+            reconnectLastDevice();
+        }, 2000);
+    }
+
+    @SuppressLint("MissingPermission")
+    private void startScanning() {
+        if (mBluetoothAdapter == null) {
+            Toast.makeText(getContext(), "Bluetooth not supported", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // need BLUETOOTH_SCAN on Android 12+
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN)
+                != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(getContext(), "Bluetooth scan permission missing", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         if (mBluetoothAdapter.isDiscovering()) mBluetoothAdapter.cancelDiscovery();
+
         mNewDevicesList.clear();
-        mDeviceAdapter = new BluetoothDeviceAdapter(requireContext(), R.layout.item_bluetooth_device, mNewDevicesList);
-        lvNewDevices.setAdapter(mDeviceAdapter);
-        mBluetoothAdapter.startDiscovery();
-        requireActivity().registerReceiver(mScanReceiver, new IntentFilter(BluetoothDevice.ACTION_FOUND));
+        if (mDeviceAdapter != null) mDeviceAdapter.notifyDataSetChanged();
+
+        if (!scanReceiverRegistered) {
+            requireActivity().registerReceiver(mScanReceiver, new IntentFilter(BluetoothDevice.ACTION_FOUND));
+            scanReceiverRegistered = true;
+        }
+
+        boolean ok = mBluetoothAdapter.startDiscovery();
+        if (!ok) Toast.makeText(getContext(), "Discovery failed to start", Toast.LENGTH_SHORT).show();
     }
 
     @Override
@@ -176,10 +263,13 @@ public class BluetoothFragment extends Fragment {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        try {
-            requireActivity().unregisterReceiver(mScanReceiver);
-        } catch (Exception e) {
-            Log.d(TAG, "Unregistering receiver failed");
+        if (scanReceiverRegistered) {
+            try {
+                requireActivity().unregisterReceiver(mScanReceiver);
+            } catch (Exception e) {
+                Log.d(TAG, "Unregister scan receiver failed");
+            }
+            scanReceiverRegistered = false;
         }
     }
 }
