@@ -39,6 +39,10 @@ public class MainActivity extends AppCompatActivity {
                 if (message != null && (message.startsWith(Constants.HEADER_ROBOT) || message.startsWith(Constants.HEADER_TARGET))) {
                     robotViewModel.setIncomingCommand(message);
                 }
+                MapFragment mapFrag = (MapFragment) getSupportFragmentManager().findFragmentByTag("map_tag");
+                if (mapFrag != null){
+                    mapFrag.handleIncomingCommand(message);
+                }
             }
             else if (Constants.INTENT_CONNECTION_STATUS.equals(action)) {
                 String status = intent.getStringExtra("status");

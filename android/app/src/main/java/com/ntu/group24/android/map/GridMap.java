@@ -444,6 +444,10 @@ public class GridMap extends View {
         }
     }
 
+    public Map<Integer, Obstacle> getObstacles() {
+        return obstacles;
+    }
+
     private void notifyRobotMovement() {
         if (robotMovedListener != null) {
             robotMovedListener.onRobotMoved(robot.getX(), robot.getY(), robot.getDirection());

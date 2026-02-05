@@ -50,6 +50,14 @@ public class CommunicationsFragment extends Fragment {
                 case Constants.INTENT_MESSAGE_SENT:
                     handleMessageSent(intent);
                     break;
+                case Constants.INTENT_ROBOT_ACTIVITY_STATUS:
+                    String activityStatus = intent.getStringExtra("message");
+                    if (activityStatus != null && tvStatus != null) {
+                        tvStatus.setText(activityStatus);
+                        tvStatus.setBackgroundColor(Color.parseColor("#BBDEFB"));
+                        appendLine("[RX] " + activityStatus);
+                    }
+                    break;
             }
         }
     };
@@ -130,6 +138,7 @@ public class CommunicationsFragment extends Fragment {
         filter.addAction(Constants.INTENT_MESSAGE_RECEIVED);
         filter.addAction(Constants.INTENT_CONNECTION_STATUS);
         filter.addAction(Constants.INTENT_MESSAGE_SENT);
+        filter.addAction(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(commsReceiver, filter);
     }
 

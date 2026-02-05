@@ -92,6 +92,13 @@ public class ControlFragment extends Fragment {
         // Send to RPi
         activity.getBluetoothService().write(cmd);
 
+        // Broadcast status for task buttons (C.4)
+        if (cmd.equals(Constants.START_EXPLORATION) || cmd.equals(Constants.START_FASTEST_PATH)) {
+            Intent statusIntent = new Intent(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
+            statusIntent.putExtra("message", "Ready to Start: Looking for Target 1");
+            LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(statusIntent);
+        }
+
         Toast.makeText(requireContext(), "Sent: " + cmd, Toast.LENGTH_SHORT).show();
     }
 

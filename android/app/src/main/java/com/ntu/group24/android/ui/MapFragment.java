@@ -10,6 +10,12 @@ import android.widget.EditText;
 import android.widget.Spinner;
 import android.widget.Toast;
 import android.widget.TextView;
+import android.content.BroadcastReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.Context;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -29,6 +35,16 @@ public class MapFragment extends Fragment {
 
     private GridMap gridMap;
     private TextView tvRobotStatus;
+    private int currentTargetIndex = 0;
+
+    private final BroadcastReceiver taskResetReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // Reset counter when any task command is sent
+            currentTargetIndex = 0;
+            Log.d("MapFragment", "Task started: Target index reset to 0");
+        }
+    };
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
@@ -60,7 +76,7 @@ public class MapFragment extends Fragment {
 
         robotViewModel.getIncomingCommand().observe(getViewLifecycleOwner(), command -> {
             if (command != null && gridMap != null) {
-                gridMap.applyCommand(command);
+                handleIncomingCommand(command);
             }
         });
 
@@ -160,8 +176,53 @@ public class MapFragment extends Fragment {
     }
 
     public void handleIncomingCommand(String command) {
-        if (gridMap != null) {
-            gridMap.applyCommand(command);
+        if (gridMap == null || command == null){
+            return;
         }
+
+        // Update map display
+        gridMap.applyCommand(command);
+
+        // Update status messages (C.4)
+        if (command.startsWith("TARGET")) {
+            // Only increment if a new target index higher than current is received
+            String[] parts = command.split(",");
+            try {
+                int detectedTargetNo = Integer.parseInt(parts[1]);
+                if (detectedTargetNo > currentTargetIndex) {
+                    currentTargetIndex = detectedTargetNo;
+
+                    int totalObstacles = gridMap.getObstacles().size();
+                    if (currentTargetIndex < totalObstacles) {
+                        broadcastRobotStatus("Looking for Target " + (currentTargetIndex + 1));
+                    } else {
+                        broadcastRobotStatus("All " + totalObstacles + " Targets Found - Task Complete");
+                    }
+                }
+            } catch (Exception e) {
+                currentTargetIndex++;
+            }
+        }
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        // Register receiver to listen for when Task 1/Task 2 buttons are pressed
+        LocalBroadcastManager.getInstance(requireContext())
+                .registerReceiver(taskResetReceiver, new IntentFilter(Constants.INTENT_MESSAGE_SENT));
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(taskResetReceiver);
+    }
+
+    private void broadcastRobotStatus(String status) {
+        if (!isAdded()) return;
+        Intent intent = new Intent(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
+        intent.putExtra("message", status);
+        LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(intent);
     }
 }

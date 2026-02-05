@@ -30,7 +30,7 @@ public class Constants {
     // Image ID
     public static final String HEADER_TARGET = "TARGET";
     // Status message (C.4)
-    public static final String HEADER_STATUS = "STATUS";
+    public static final String INTENT_ROBOT_ACTIVITY_STATUS = "com.ntu.group24.ROBOT_ACTIVITY_STATUS";
 
     // Shared preference keys for saving map data
     public static final String PREF_MAP_CONFIG = "map_config";
