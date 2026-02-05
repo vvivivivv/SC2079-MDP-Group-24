@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "oled.h"
+#include "sensor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -155,7 +156,7 @@ int main(void)
   MX_TIM12_Init();
   /* USER CODE BEGIN 2 */
   OLED_Init();
-
+  IR_Sensors_Init();
 
   //HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
 
@@ -184,6 +185,30 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  /* USER CODE BEGIN 3 */
+
+	  uint8_t left  = IR_LeftDetected();
+	  uint8_t right = IR_RightDetected();
+
+	  if (!left && !right) {
+	      move(1);        // move forward
+	  }
+	  else if (left && !right) {
+	      // turn right
+	      turn();
+	  }
+	  else if (!left && right) {
+	      // turn left
+	      turn();
+	  }
+	  else {
+	      stop();           // stop
+	  }
+
+	  HAL_Delay(50);
+
+	  /* USER CODE END 3 */
+
   }
   /* USER CODE END 3 */
 }
