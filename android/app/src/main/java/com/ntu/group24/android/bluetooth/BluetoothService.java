@@ -50,6 +50,12 @@ public class BluetoothService {
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
     }
 
+    private void sendMessageSentBroadcast(String message) {
+        Intent intent = new Intent(Constants.INTENT_MESSAGE_SENT);
+        intent.putExtra("message", message);
+        LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
+    }
+
     // Thread 1: Server Mode (To receive connection from AMD Tool)
     private class AcceptThread extends Thread {
         private BluetoothServerSocket mmServerSocket;
@@ -218,6 +224,8 @@ public class BluetoothService {
                 mmOutStream.flush();
             } catch (IOException e) {
                 Log.e(TAG, "Write failed", e);
+                isConnected = false;
+                sendStatusBroadcast("Disconnected");
             }
         }
 
@@ -279,23 +287,28 @@ public class BluetoothService {
     }
 
     public void write(String message) {
-        ConnectedThread r;
+        if (message == null) return;
 
+        // 1) Always show in COMMS as TX
+        Intent tx = new Intent(Constants.INTENT_MESSAGE_SENT);
+        tx.putExtra("message", message);
+        LocalBroadcastManager.getInstance(mContext).sendBroadcast(tx);
+
+        ConnectedThread r;
         synchronized (this) {
-            if (!isConnected || mConnectedThread == null) {
-                Log.e(TAG, "Not connected, cannot write");
-                return;
-            }
             r = mConnectedThread;
         }
-        // Send the physical bytes to the AMD Tool
-        //r.write(message.getBytes(Charset.defaultCharset()));
+
+        // 2) If not connected, tell UI and exit (but TX is already shown)
+        if (!isConnected || r == null) {
+            Log.e(TAG, "Not connected, cannot write: " + message);
+            sendStatusBroadcast("Send Failed"); // optional but helpful
+            return;
+        }
+
+        // 3) Actually send bytes
         r.write((message + "\n").getBytes(StandardCharsets.UTF_8));
-
-        Intent intent = new Intent(Constants.INTENT_MESSAGE_SENT);
-        intent.putExtra("message", message);
-        LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
-
         Log.d(TAG, "Sent message: " + message);
     }
+
 }
