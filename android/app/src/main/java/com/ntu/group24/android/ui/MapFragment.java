@@ -47,6 +47,9 @@ public class MapFragment extends Fragment {
         Button btnSet = view.findViewById(R.id.btnSetRobot);
         tvRobotStatus = view.findViewById(R.id.tvRobotStatus);
 
+        // Initialise status for robot position
+        tvRobotStatus.setText(getString(R.string.robot_status_format, 3, 3, "N"));
+
         // Observe changes from control fragment
         robotViewModel.getMoveRequest().observe(getViewLifecycleOwner(), direction -> {
             if (direction != null && gridMap != null) {
