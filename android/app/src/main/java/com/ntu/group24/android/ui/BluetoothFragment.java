@@ -65,7 +65,6 @@ public class BluetoothFragment extends Fragment {
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
             if (!isAdded() || getContext() == null) return;
-            // duplicated maybe - can comment below part later
             if (Constants.INTENT_MESSAGE_RECEIVED.equals(action)) {
                 String message = intent.getStringExtra("message");
 
@@ -82,7 +81,13 @@ public class BluetoothFragment extends Fragment {
 
                 if (status != null) {
                     tvConnectionStatus.setText(getString(R.string.status_format, status));
-
+                    if (status.equalsIgnoreCase("Connected")) {
+                        tvConnectionStatus.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark));
+                    } else if (status.contains("Connecting") || status.contains("Listening")) {
+                        tvConnectionStatus.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_orange_dark));
+                    } else {
+                        tvConnectionStatus.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_red_dark));
+                    }
                     // Auto-reconnect logic (C.8)
                     if (getString(R.string.state_disconnected).equals(status) && !isRetrying) {
                         isRetrying = true;

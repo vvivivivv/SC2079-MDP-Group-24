@@ -13,8 +13,14 @@
     <string name="state_failed">Connection Failed</string>
     <string name="msg_not_connected">Not connected!</string>
 
+    <!-- Connection Statuses -->
+    <string name="status_disconnected">Status: Disconnected</string>
+    <string name="status_listening">Start Listening (AMD)</string>
+
     <!-- Feedback Messages -->
+    <string name="msg_scan">SCAN FOR RPi</string>
     <string name="msg_scanning">Scanning for RPi</string>
+    <string name="msg_waiting">Waiting for messages...</string>
     <string name="msg_reconnecting">Connection lost. Retrying in 5s</string>
     <string name="error_permission_denied">Permission Denied</string>
     <string name="unknown_device">Unknown Device</string>

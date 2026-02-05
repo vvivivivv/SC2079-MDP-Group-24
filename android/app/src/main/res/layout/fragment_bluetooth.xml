@@ -9,7 +9,7 @@
         android:id="@+id/tvConnectionStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Status: Disconnected"
+        android:text="@string/status_disconnected"
         android:textColor="#FF0000" />
 
     <Button
@@ -17,13 +17,13 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
-        android:text="SCAN FOR RPi" />
+        android:text="@string/msg_scan" />
 
     <Button
         android:id="@+id/btnListen"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Start Listening (AMD)" />
+        android:text="@string/status_listening" />
 
     <ListView
         android:id="@+id/lvDevices"
@@ -41,7 +41,7 @@
         android:layout_marginTop="10dp"
         android:background="#000000"
         android:padding="5dp"
-        android:text="Waiting for messages..."
+        android:text="@string/msg_waiting"
         android:textColor="#00FF00"
         android:fontFamily="monospace"
         android:scrollbars="vertical" />
