@@ -60,12 +60,11 @@ public class ControlFragment extends Fragment {
         MainActivity activity = (MainActivity) getActivity();
         String cmd = "";
 
-        // Map to specific protocols required by the AMD tool/RPi
         switch (direction) {
-            case "FORWARD":  cmd = "f";  break;
-            case "BACKWARD": cmd = "b";  break;
-            case "LEFT":     cmd = "tl"; break;
-            case "RIGHT":    cmd = "tr"; break;
+            case "FORWARD":  cmd = Constants.MOVE_FORWARD;  break;  // "f"
+            case "BACKWARD": cmd = Constants.MOVE_BACKWARD; break;  // "b"
+            case "LEFT":     cmd = Constants.TURN_LEFT;     break;  // "tl"
+            case "RIGHT":    cmd = Constants.TURN_RIGHT;    break;  // "tr"
         }
 
         // Send the command (f, b, tl, tr) to Bluetooth
@@ -101,6 +100,5 @@ public class ControlFragment extends Fragment {
 
         Toast.makeText(requireContext(), "Sent: " + cmd, Toast.LENGTH_SHORT).show();
     }
-
 
 }

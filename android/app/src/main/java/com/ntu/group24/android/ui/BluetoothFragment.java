@@ -71,6 +71,8 @@ public class BluetoothFragment extends Fragment {
                 // Selective info (don't log robot coordinates) (C.4)
                 if (message != null && !message.startsWith(Constants.HEADER_ROBOT)) {
                     tvMessageLog.append(getString(R.string.robot_log_format, message));
+                //if (message != null) {
+                    //tvMessageLog.append("[RX] " + message + "\n");
 
                     final int scrollAmount = tvMessageLog.getLayout().getLineTop(tvMessageLog.getLineCount()) - tvMessageLog.getHeight();
                     if (scrollAmount > 0) tvMessageLog.scrollTo(0, scrollAmount);
@@ -81,25 +83,49 @@ public class BluetoothFragment extends Fragment {
 
                 if (status != null) {
                     tvConnectionStatus.setText(getString(R.string.status_format, status));
-                    if (status.equalsIgnoreCase("Connected")) {
+                    String lowerStatus = status.toLowerCase();
+                    if (lowerStatus.equals("connected")) {
                         tvConnectionStatus.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark));
-                    } else if (status.contains("Connecting") || status.contains("Listening")) {
+                        isRetrying = false;
+                        reconnectionHandler.removeCallbacksAndMessages(null);
+                    } else if (lowerStatus.contains("connecting") || lowerStatus.contains("listening")) {
                         tvConnectionStatus.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_orange_dark));
                     } else {
                         tvConnectionStatus.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_red_dark));
+                        if (!isRetrying){
+                            isRetrying = true;
+                            attemptAutoReconnect();
+                        }
                     }
                     // Auto-reconnect logic (C.8)
-                    if (getString(R.string.state_disconnected).equals(status) && !isRetrying) {
+                   /* if (getString(R.string.state_disconnected).equals(status) && !isRetrying) {
                         isRetrying = true;
                         attemptAutoReconnect();
                     } else if (getString(R.string.state_connected).equals(status)) {
                         isRetrying = false;
                         reconnectionHandler.removeCallbacksAndMessages(null);
-                    }
+                    }*/
                 }
             }
         }
     };
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Constants.INTENT_MESSAGE_RECEIVED);
+        filter.addAction(Constants.INTENT_CONNECTION_STATUS);
+        LocalBroadcastManager.getInstance(requireContext()).registerReceiver(mDataReceiver, filter);
+        Log.d(TAG, "Receiver Registered in onStart");
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(mDataReceiver);
+        Log.d(TAG, "Receiver Unregistered in onStop");
+    }
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -121,12 +147,12 @@ public class BluetoothFragment extends Fragment {
             MainActivity activity = (MainActivity) getActivity();
             if (activity != null && activity.getBluetoothService() != null) {
 
-                // 1. Request Discoverability (Required for external tools to find you)
+                // Request Discoverability
                 Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
                 discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300);
                 startActivity(discoverableIntent);
 
-                // 2. Start the AcceptThread manually
+                // Start the AcceptThread manually
                 activity.getBluetoothService().start();
 
                 tvConnectionStatus.setText("Status: Listening...");
@@ -135,7 +161,7 @@ public class BluetoothFragment extends Fragment {
         });
 
         lvNewDevices.setOnItemClickListener((parent, view, position, id) -> {
-            // Explicitly check for BLUETOOTH_CONNECT permission (Android 12+)
+            // Explicitly check for BLUETOOTH_CONNECT permission
             if (androidx.core.content.ContextCompat.checkSelfPermission(requireContext(),
                     android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED
                     && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
@@ -144,17 +170,17 @@ public class BluetoothFragment extends Fragment {
             }
 
             try {
-                // 1. Stop discovery (Crucial for connection stability)
+                // Stop discovery
                 if (mBluetoothAdapter.isDiscovering()) {
                     mBluetoothAdapter.cancelDiscovery();
                 }
 
-                // 2. Get the device
+                // Get device
                 BluetoothDevice device = mNewDevicesList.get(position);
                 String deviceName = device.getName() != null ? device.getName() : "Unknown Device";
                 Log.d(TAG, "Connecting to: " + deviceName + " [" + device.getAddress() + "]");
 
-                // 3. Initiate connection via Service
+                // Initiate connection via Service
                 MainActivity activity = (MainActivity) getActivity();
                 if (activity != null && activity.getBluetoothService() != null) {
                     tvConnectionStatus.setText("Status: Connecting...");
@@ -195,7 +221,7 @@ public class BluetoothFragment extends Fragment {
         requireActivity().registerReceiver(mScanReceiver, new IntentFilter(BluetoothDevice.ACTION_FOUND));
     }
 
-    @Override
+  /*  @Override
     public void onResume() {
         super.onResume();
         IntentFilter filter = new IntentFilter();
@@ -208,7 +234,7 @@ public class BluetoothFragment extends Fragment {
     public void onPause() {
         super.onPause();
         LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(mDataReceiver);
-    }
+    }*/
 
     @Override
     public void onDestroy() {

@@ -164,11 +164,13 @@ public class BluetoothService {
             mmOutStream = tmpOut;
         }
 
+        @Override
         public void run() {
             if (mmInStream == null || mmOutStream == null) {
                 connectionLost();
                 return;
             }
+
             isConnected = true;
             sendStatusBroadcast("Connected");
 
@@ -178,19 +180,45 @@ public class BluetoothService {
             while (running) {
                 try {
                     int bytes = mmInStream.read(buffer);
-                    if (bytes == -1) { connectionLost(); break; }
+                    if (bytes == -1) {
+                        Log.d(TAG, "Remote closed stream (-1)");
+                        connectionLost();
+                        break;
+                    }
 
                     String chunk = new String(buffer, 0, bytes, StandardCharsets.UTF_8);
+                    Log.d(TAG, "RX raw chunk: " + chunk);
+
                     sb.append(chunk);
 
+                    boolean emittedLine = false;
+
+                    // Emit newline-delimited lines (handles \n and \r\n)
                     int idx;
                     while ((idx = sb.indexOf("\n")) != -1) {
-                        String line = sb.substring(0, idx).trim();
+                        String line = sb.substring(0, idx).replace("\r", "").trim();
                         sb.delete(0, idx + 1);
-                        if (!line.isEmpty()) sendMessageBroadcast(line);
+
+                        if (!line.isEmpty()) {
+                            sendMessageBroadcast(line);
+                            emittedLine = true;
+                        }
                     }
+
+                    // Broadcast message from AMD tool (without newline)
+                    if (!emittedLine) {
+                        String msg = sb.toString().replace("\r", "").trim();
+                        if (!msg.isEmpty()) {
+                            sendMessageBroadcast(msg);
+                            sb.setLength(0);
+                        }
+                    }
+
                 } catch (IOException e) {
+                    Log.e(TAG, "Read failed, connection lost", e);
                     connectionLost();
+                    isConnected = false;
+                    sendStatusBroadcast("Disconnected");
                     break;
                 }
             }
@@ -236,6 +264,19 @@ public class BluetoothService {
 
     private synchronized void manageConnectedSocket(BluetoothSocket socket, BluetoothDevice device) {
         mDevice = device;
+
+        String addr = "unknown";
+        try { addr = device.getAddress(); } catch (Exception ignored) {}
+
+        String name = "unknown";
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                mContext, android.Manifest.permission.BLUETOOTH_CONNECT
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            try { name = device.getName(); } catch (Exception ignored) {}
+        }
+
+        Log.d(TAG, "manageConnectedSocket(): CONNECTED TO = " + name + " (" + addr + ")");
+
         if (mAcceptThread != null) { mAcceptThread.cancel(); mAcceptThread = null; }
         if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
         if (mConnectedThread != null) { mConnectedThread.cancel(); mConnectedThread = null; }
@@ -263,22 +304,40 @@ public class BluetoothService {
     public void write(String message) {
         if (message == null) return;
 
-        sendMessageSentBroadcast(message);
+        message = message.trim();
+
+        // Always show in COMMS as TX
+        Intent tx = new Intent(Constants.INTENT_MESSAGE_SENT);
+        tx.putExtra("message", message);
+        LocalBroadcastManager.getInstance(mContext).sendBroadcast(tx);
 
         ConnectedThread r;
         synchronized (this) {
             r = mConnectedThread;
         }
 
-        // If not connected, tell UI and exit
         if (!isConnected || r == null) {
             Log.e(TAG, "Not connected, cannot write: " + message);
             sendStatusBroadcast("Send Failed");
             return;
         }
 
-        // Send bytes via bluetooth
-        r.write((message + "\n").getBytes(StandardCharsets.UTF_8));
-        Log.d(TAG, "Sent message: " + message);
+        // Movement commands
+        boolean isMove =
+                message.equals(Constants.MOVE_FORWARD) ||
+                        message.equals(Constants.MOVE_BACKWARD) ||
+                        message.equals(Constants.TURN_LEFT) ||
+                        message.equals(Constants.TURN_RIGHT);
+
+        byte[] payload;
+        if (isMove) {
+            payload = message.getBytes(StandardCharsets.UTF_8); // "f", "b", "tl", "tr"
+        } else {
+            payload = (message + "\n").getBytes(StandardCharsets.UTF_8); // other commands/messages
+        }
+
+        r.write(payload);
+        Log.d(TAG, "Sent bytes: '" + message + "'" + (isMove ? " (no newline)" : " (with newline)"));
     }
+
 }
