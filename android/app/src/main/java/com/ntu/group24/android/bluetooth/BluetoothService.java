@@ -164,11 +164,13 @@ public class BluetoothService {
             mmOutStream = tmpOut;
         }
 
+        @Override
         public void run() {
             if (mmInStream == null || mmOutStream == null) {
                 connectionLost();
                 return;
             }
+
             isConnected = true;
             sendStatusBroadcast("Connected");
 
@@ -178,18 +180,42 @@ public class BluetoothService {
             while (running) {
                 try {
                     int bytes = mmInStream.read(buffer);
-                    if (bytes == -1) { connectionLost(); break; }
+                    if (bytes == -1) {
+                        Log.d(TAG, "Remote closed stream (-1)");
+                        connectionLost();
+                        break;
+                    }
 
                     String chunk = new String(buffer, 0, bytes, StandardCharsets.UTF_8);
+                    Log.d(TAG, "RX raw chunk: " + chunk);
+
                     sb.append(chunk);
 
+                    boolean emittedLine = false;
+
+                    // 1) Emit newline-delimited lines (handles \n and \r\n)
                     int idx;
                     while ((idx = sb.indexOf("\n")) != -1) {
-                        String line = sb.substring(0, idx).trim();
+                        String line = sb.substring(0, idx).replace("\r", "").trim();
                         sb.delete(0, idx + 1);
-                        if (!line.isEmpty()) sendMessageBroadcast(line);
+
+                        if (!line.isEmpty()) {
+                            sendMessageBroadcast(line);
+                            emittedLine = true;
+                        }
                     }
+
+                    // 2) If AMD tool sends WITHOUT newline, emit what we got
+                    if (!emittedLine) {
+                        String msg = sb.toString().replace("\r", "").trim();
+                        if (!msg.isEmpty()) {
+                            sendMessageBroadcast(msg);
+                            sb.setLength(0);
+                        }
+                    }
+
                 } catch (IOException e) {
+                    Log.e(TAG, "Read failed, connection lost", e);
                     connectionLost();
                     break;
                 }
