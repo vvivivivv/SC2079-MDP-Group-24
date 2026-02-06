@@ -16,6 +16,7 @@ import com.ntu.group24.android.utils.Constants;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+//import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 
 public class BluetoothService {
@@ -49,12 +50,6 @@ public class BluetoothService {
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
     }
 
-    private void sendMessageSentBroadcast(String message) {
-        Intent intent = new Intent(Constants.INTENT_MESSAGE_SENT);
-        intent.putExtra("message", message);
-        LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
-    }
-
     // Thread 1: Server Mode (To receive connection from AMD Tool)
     private class AcceptThread extends Thread {
         private BluetoothServerSocket mmServerSocket;
@@ -67,6 +62,26 @@ public class BluetoothService {
                 Log.e(TAG, "AcceptThread listen() failed", e);
             }
         }
+
+        /*public void run() {
+            BluetoothSocket socket = null;
+            while (!isConnected) {
+                try {
+                    if (mmServerSocket != null) {
+                        socket = mmServerSocket.accept();
+                    }
+                } catch (IOException e) {
+                    Log.e(TAG, "AcceptThread accept() failed", e);
+                    break;
+                }
+
+                if (socket != null) {
+                    synchronized (BluetoothService.this) {
+                        manageConnectedSocket(socket, socket.getRemoteDevice());
+                    }
+                }
+            }
+        }*/
 
         public void run() {
             BluetoothSocket socket;
@@ -130,6 +145,7 @@ public class BluetoothService {
                 Log.e(TAG, "Connect failed: " + e.getMessage());
                 try { mmSocket.close(); } catch (IOException ignored) {}
                 sendStatusBroadcast("Connection Failed");
+                //BluetoothService.this.start();
             }
         }
 
@@ -202,8 +218,6 @@ public class BluetoothService {
                 mmOutStream.flush();
             } catch (IOException e) {
                 Log.e(TAG, "Write failed", e);
-                isConnected = false;
-                sendStatusBroadcast("Disconnected");
             }
         }
 
@@ -214,6 +228,10 @@ public class BluetoothService {
     }
 
     public synchronized void start() {
+        /*if (mConnectThread != null) { mConnectThread.cancel(); mConnectThread = null; }
+        if (mConnectedThread != null) { mConnectedThread.cancel(); mConnectedThread = null; }
+        isConnected = false;*/
+
         Log.d(TAG, "start(): server listen only");
 
         if (mAcceptThread == null) {
@@ -261,24 +279,23 @@ public class BluetoothService {
     }
 
     public void write(String message) {
-        if (message == null) return;
-
-        sendMessageSentBroadcast(message);
-
         ConnectedThread r;
+
         synchronized (this) {
+            if (!isConnected || mConnectedThread == null) {
+                Log.e(TAG, "Not connected, cannot write");
+                return;
+            }
             r = mConnectedThread;
         }
-
-        // If not connected, tell UI and exit
-        if (!isConnected || r == null) {
-            Log.e(TAG, "Not connected, cannot write: " + message);
-            sendStatusBroadcast("Send Failed");
-            return;
-        }
-
-        // Send bytes via bluetooth
+        // Send the physical bytes to the AMD Tool
+        //r.write(message.getBytes(Charset.defaultCharset()));
         r.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+
+        Intent intent = new Intent(Constants.INTENT_MESSAGE_SENT);
+        intent.putExtra("message", message);
+        LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
+
         Log.d(TAG, "Sent message: " + message);
     }
 }
