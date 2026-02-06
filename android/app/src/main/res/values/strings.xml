@@ -1,0 +1,45 @@
+<resources>
+    <string name="app_name">MDP_Group24</string>
+    <string name="bluetooth_setup">Bluetooth Setup</string>
+
+    <!-- Status Display (C.4, C.8) -->
+    <string name="status_format">Status: %1$s</string>
+    <string name="robot_log_format">Robot: %1$s\n</string>
+
+    <!-- Connection States -->
+    <string name="state_connected">Connected</string>
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_connecting">Connecting</string>
+    <string name="state_failed">Connection Failed</string>
+    <string name="msg_not_connected">Not connected!</string>
+
+    <!-- Connection Statuses -->
+    <string name="status_disconnected">Status: Disconnected</string>
+    <string name="status_listening">Start Listening (AMD)</string>
+
+    <!-- Feedback Messages -->
+    <string name="msg_scan">SCAN FOR RPi</string>
+    <string name="msg_scanning">Scanning for RPi</string>
+    <string name="msg_waiting">Waiting for messages...</string>
+    <string name="msg_reconnecting">Connection lost. Retrying in 5s</string>
+    <string name="error_permission_denied">Permission Denied</string>
+    <string name="unknown_device">Unknown Device</string>
+
+    <!-- Placeholders and Communications -->
+    <string name="control_setup">Control</string>
+    <string name="status_placeholder">Status: -</string>
+    <string name="hint_message_amd">Enter Message to AMD Tool</string>
+    <string name="btn_send">SEND</string>
+
+    <!-- Grid map -->
+    <string name="label_x">X:</string>
+    <string name="label_y">Y:</string>
+    <string name="hint_coord">coord</string>
+    <string name="btn_set_robot">SET ROBOT</string>
+    <string name="msg_robot_set">Robot set to %1$s, %2$s</string>
+    <string name="msg_start_zone_reserved">Start zone reserved</string>
+    <string name="robot_status_format">Robot: (%1$d, %2$d) Facing: %3$s</string>
+    <string name="hint_zero">0</string>
+    <string name="btn_set">SET</string>
+
+</resources>
