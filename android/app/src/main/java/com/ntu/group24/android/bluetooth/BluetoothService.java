@@ -205,6 +205,7 @@ public class BluetoothService {
                         }
                     }
 
+
                     // 2) If AMD tool sends WITHOUT newline, emit what we got
                     if (!emittedLine) {
                         String msg = sb.toString().replace("\r", "").trim();
