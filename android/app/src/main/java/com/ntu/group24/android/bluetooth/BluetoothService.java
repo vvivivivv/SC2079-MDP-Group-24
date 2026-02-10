@@ -256,11 +256,6 @@ public class BluetoothService {
         // quick reject
         if (!s.toUpperCase().startsWith("TARGET")) return false;
 
-        // Accept formats like:
-        // TARGET,2,30
-        // TARGET:2:30
-        // TARGET 2 30
-        // TARGET|2|30
         String normalized = s.replace("TARGET", "")
                 .replace("target", "")
                 .replace(":", ",")

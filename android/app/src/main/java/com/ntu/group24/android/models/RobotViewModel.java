@@ -23,11 +23,4 @@ public class RobotViewModel extends ViewModel {
         return incomingCommand;
     }
 
-    public void updateObstacleImageId(int obstacleNo, int imageId) {
-        // TODO: update your obstacle list/map
-        // Example idea:
-        // Obstacle o = obstaclesByNumber.get(obstacleNo);
-        // if (o != null) { o.setImageId(imageId); obstaclesLiveData.setValue(updatedList); }
-    }
-
 }

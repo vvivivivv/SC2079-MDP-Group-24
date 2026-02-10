@@ -76,11 +76,6 @@ public class MapFragment extends Fragment {
             if (!updated) {
                 Log.d("MapFragment", "No matching obstacle found for obstacleNo=" + obstacleNo);
             }
-
-            // Optional status update (C.4)
-            // Example: "Finding Target 2" etc.
-            // If obstacleNo is the "target index", you can keep your existing logic.
-            // If obstacleNo is the obstacle's ID, then don't use it as target count.
         }
     };
 
@@ -213,15 +208,15 @@ public class MapFragment extends Fragment {
         }
     }
 
-    // C.9 core: update obstacle with imageId
+    // Update obstacle with imageId (C.9)
     private boolean updateObstacleImageId(int obstacleNo, int imageId) {
         if (gridMap == null) return false;
 
         try {
             for (Obstacle o : gridMap.getObstacles().values()) {
                 if (o != null && o.getId() == obstacleNo) {
-                    o.setTargetId(imageId);   // <-- correct for your Obstacle.java
-                    gridMap.invalidate();      // redraw
+                    o.setTargetId(imageId);
+                    gridMap.invalidate();
                     return true;
                 }
             }
@@ -240,7 +235,7 @@ public class MapFragment extends Fragment {
         // Update map display
         gridMap.applyCommand(command);
 
-        // Your existing status logic (C.4)
+        // Update status messages (C.4)
         if (command.startsWith("TARGET")) {
             String[] parts = command.split(",");
             try {
@@ -270,7 +265,7 @@ public class MapFragment extends Fragment {
         // Task reset when Task 1/Task 2 is sent
         lbm.registerReceiver(taskResetReceiver, new IntentFilter(Constants.INTENT_MESSAGE_SENT));
 
-        // C.9: target detected from BluetoothService
+        // Target detected from BluetoothService (C.9)
         lbm.registerReceiver(targetDetectedReceiver, new IntentFilter(Constants.INTENT_TARGET_DETECTED));
     }
 
