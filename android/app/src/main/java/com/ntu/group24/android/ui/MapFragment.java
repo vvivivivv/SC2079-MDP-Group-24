@@ -37,12 +37,50 @@ public class MapFragment extends Fragment {
     private TextView tvRobotStatus;
     private int currentTargetIndex = 0;
 
+    // Resets ONLY when Task 1/Task 2 is sent (not every random TX)
     private final BroadcastReceiver taskResetReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            // Reset counter when any task command is sent
-            currentTargetIndex = 0;
-            Log.d("MapFragment", "Task started: Target index reset to 0");
+            if (!isAdded()) return;
+
+            String msg = intent.getStringExtra("message");
+            if (msg == null) return;
+
+            if (msg.equals(Constants.START_EXPLORATION) || msg.equals(Constants.START_FASTEST_PATH)) {
+                currentTargetIndex = 0;
+                Log.d("MapFragment", "Task started: Target index reset to 0");
+                broadcastRobotStatus("Ready to Start");
+            }
+        }
+    };
+
+    // C.9 receiver: RPi sends TARGET with obstacle no + imageId
+    private final BroadcastReceiver targetDetectedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!isAdded() || gridMap == null) return;
+
+            int obstacleNo = intent.getIntExtra(Constants.EXTRA_OBSTACLE_NO, -1);
+            int imageId = intent.getIntExtra(Constants.EXTRA_IMAGE_ID, -1);
+
+            if (obstacleNo <= 0 || imageId <= 0) {
+                Log.d("MapFragment", "Invalid TARGET payload: obstacleNo=" + obstacleNo + ", imageId=" + imageId);
+                return;
+            }
+
+            Log.d("MapFragment", "TARGET detected: obstacleNo=" + obstacleNo + ", imageId=" + imageId);
+
+            // Update the obstacle on the grid to show the imageId
+            boolean updated = updateObstacleImageId(obstacleNo, imageId);
+
+            if (!updated) {
+                Log.d("MapFragment", "No matching obstacle found for obstacleNo=" + obstacleNo);
+            }
+
+            // Optional status update (C.4)
+            // Example: "Finding Target 2" etc.
+            // If obstacleNo is the "target index", you can keep your existing logic.
+            // If obstacleNo is the obstacle's ID, then don't use it as target count.
         }
     };
 
@@ -175,6 +213,25 @@ public class MapFragment extends Fragment {
         }
     }
 
+    // C.9 core: update obstacle with imageId
+    private boolean updateObstacleImageId(int obstacleNo, int imageId) {
+        if (gridMap == null) return false;
+
+        try {
+            for (Obstacle o : gridMap.getObstacles().values()) {
+                if (o != null && o.getId() == obstacleNo) {
+                    o.setTargetId(imageId);   // <-- correct for your Obstacle.java
+                    gridMap.invalidate();      // redraw
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            Log.e("MapFragment", "updateObstacleImageId failed", e);
+        }
+        return false;
+    }
+
+
     public void handleIncomingCommand(String command) {
         if (gridMap == null || command == null){
             return;
@@ -183,9 +240,8 @@ public class MapFragment extends Fragment {
         // Update map display
         gridMap.applyCommand(command);
 
-        // Update status messages (C.4)
+        // Your existing status logic (C.4)
         if (command.startsWith("TARGET")) {
-            // Only increment if a new target index higher than current is received
             String[] parts = command.split(",");
             try {
                 int detectedTargetNo = Integer.parseInt(parts[1]);
@@ -208,15 +264,23 @@ public class MapFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        // Register receiver to listen for when Task 1/Task 2 buttons are pressed
-        LocalBroadcastManager.getInstance(requireContext())
-                .registerReceiver(taskResetReceiver, new IntentFilter(Constants.INTENT_MESSAGE_SENT));
+
+        LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(requireContext());
+
+        // Task reset when Task 1/Task 2 is sent
+        lbm.registerReceiver(taskResetReceiver, new IntentFilter(Constants.INTENT_MESSAGE_SENT));
+
+        // C.9: target detected from BluetoothService
+        lbm.registerReceiver(targetDetectedReceiver, new IntentFilter(Constants.INTENT_TARGET_DETECTED));
     }
 
     @Override
     public void onStop() {
         super.onStop();
-        LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(taskResetReceiver);
+
+        LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(requireContext());
+        lbm.unregisterReceiver(taskResetReceiver);
+        lbm.unregisterReceiver(targetDetectedReceiver);
     }
 
     private void broadcastRobotStatus(String status) {

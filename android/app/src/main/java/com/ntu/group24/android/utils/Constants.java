@@ -40,5 +40,8 @@ public class Constants {
     public static final String INTENT_MESSAGE_RECEIVED = "com.ntu.mdp.MESSAGE_RECEIVED";
     public static final String INTENT_CONNECTION_STATUS = "com.ntu.mdp.CONNECTION_STATUS";
     public static final String INTENT_MESSAGE_SENT = "com.ntu.mdp.MESSAGE_SENT";
+    public static final String INTENT_TARGET_DETECTED = "INTENT_TARGET_DETECTED";
+    public static final String EXTRA_OBSTACLE_NO = "obstacle_no";
+    public static final String EXTRA_IMAGE_ID = "image_id";
 
 }

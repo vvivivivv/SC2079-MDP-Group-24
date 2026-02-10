@@ -201,6 +201,7 @@ public class BluetoothService {
 
                         if (!line.isEmpty()) {
                             sendMessageBroadcast(line);
+                            tryParseAndEmitTarget(line);
                             emittedLine = true;
                         }
                     }
@@ -238,6 +239,51 @@ public class BluetoothService {
         public void cancel() {
             running = false;
             try { mmSocket.close(); } catch (IOException e) { Log.e(TAG, "Close failed", e); }
+        }
+    }
+    private void sendTargetDetectedBroadcast(int obstacleNo, int imageId) {
+        Intent i = new Intent(Constants.INTENT_TARGET_DETECTED);
+        i.putExtra(Constants.EXTRA_OBSTACLE_NO, obstacleNo);
+        i.putExtra(Constants.EXTRA_IMAGE_ID, imageId);
+        LocalBroadcastManager.getInstance(mContext).sendBroadcast(i);
+    }
+
+    private boolean tryParseAndEmitTarget(String msg) {
+        if (msg == null) return false;
+
+        String s = msg.trim();
+
+        // quick reject
+        if (!s.toUpperCase().startsWith("TARGET")) return false;
+
+        // Accept formats like:
+        // TARGET,2,30
+        // TARGET:2:30
+        // TARGET 2 30
+        // TARGET|2|30
+        String normalized = s.replace("TARGET", "")
+                .replace("target", "")
+                .replace(":", ",")
+                .replace("|", ",")
+                .replace(" ", ",")
+                .replace("\t", ",")
+                .replace("\r", "")
+                .trim();
+
+        // remove leading separators
+        while (normalized.startsWith(",")) normalized = normalized.substring(1).trim();
+
+        String[] parts = normalized.split(",");
+        if (parts.length < 2) return false;
+
+        try {
+            int obstacleNo = Integer.parseInt(parts[0].trim());
+            int imageId = Integer.parseInt(parts[1].trim());
+            sendTargetDetectedBroadcast(obstacleNo, imageId);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to parse TARGET message: " + msg, e);
+            return false;
         }
     }
 
