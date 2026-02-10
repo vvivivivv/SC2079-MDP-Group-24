@@ -59,10 +59,6 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define BIN1_Pin GPIO_PIN_5
-#define BIN1_GPIO_Port GPIOE
-#define BIN2_Pin GPIO_PIN_6
-#define BIN2_GPIO_Port GPIOE
 #define LED3_Pin GPIO_PIN_10
 #define LED3_GPIO_Port GPIOE
 #define OLED_DC_Pin_Pin GPIO_PIN_11
@@ -77,10 +73,6 @@ void Error_Handler(void);
 #define Left_IR_GPIO_Port GPIOC
 #define Right_IR_Pin GPIO_PIN_9
 #define Right_IR_GPIO_Port GPIOC
-#define AIN2_Pin GPIO_PIN_8
-#define AIN2_GPIO_Port GPIOB
-#define AIN1_Pin GPIO_PIN_9
-#define AIN1_GPIO_Port GPIOB
 /* USER CODE BEGIN Private defines */
 
 #define LED3_Pin GPIO_PIN_10
