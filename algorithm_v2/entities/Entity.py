@@ -1,33 +1,69 @@
+"""
+Entity.py — Arena objects: CellState, Obstacle, Grid.
+
+View Cone Generation (from PDF briefing + hardware specs):
+  - Camera HFOV: 62.2° (Pi Camera v2.1)
+  - Max incidence angle: 45° (camera angle to face normal)
+  - Detection range: 20–50cm face-to-face
+  - Robot footprint: 30x30cm (virtual), camera at front center
+  - Obstacle: 10x10cm block, virtual obstacle 40x40cm (slide 36)
+  - Virtual obstacle radius: 20cm from obstacle center (slide 36)
+
+For each obstacle, the image face defines a view cone. We generate
+candidates at multiple approach angles (left, center, right) and
+distances so the TSP solver can pick the one that minimizes Dubins
+path length from the previous node.
+"""
+
 import math
 from typing import List
-from consts import (
-    Direction, EXPANDED_CELL, SCREENSHOT_COST,
-    CAMERA_HALF_FOV_RAD, CAMERA_HALF_FOV_DEG, CAMERA_MAX_DIST_CELLS,
-    FOV_PENALTY_TINY_TURN, FOV_PENALTY_SMALL_TURN, FOV_PENALTY_MEDIUM_TURN,
-)
+from consts import Direction
 from helper import is_valid
 
-# Maximum incidence angle (degrees) between camera direction and face normal.
-# 0° = head-on, 90° = looking at the edge. 60° is generous but ensures readability.
-MAX_INCIDENCE_DEG = 60.0
-MAX_INCIDENCE_RAD = math.radians(MAX_INCIDENCE_DEG)
 
-# Maximum micro-turn angle (degrees) the robot can do in place.
-# Beyond this, a full 90-degree grid turn is more efficient.
-# This is NOT the camera FOV — the robot physically rotates to face the target.
-MAX_MICRO_TURN_DEG = 80.0
-MAX_MICRO_TURN_RAD = math.radians(MAX_MICRO_TURN_DEG)
+# =============================================================================
+# VIEW CONE PARAMETERS
+# =============================================================================
+
+# Face-to-camera distances (cm). Slide 4: "best position 20cm away".
+# We measure from the IMAGE FACE to the camera (robot front center).
+# Robot center is ~15cm behind camera, so robot-center-to-face = dist + 15.
+# In grid coords, obstacle center to robot center = (dist + 5) / 10 grid units.
+#   dist=25cm => robot center is 30cm from face => 35cm from obs center => 3.5 grid
+#   dist=35cm => robot center is 40cm from face => 45cm from obs center => 4.5 grid
+FACE_DISTANCES_CM = [25, 35]
+
+# Approach angle offsets from the face normal (degrees).
+# 0° = dead center, ±30° = angled approaches.
+# All within the 45° max incidence angle.
+APPROACH_ANGLES_DEG = [-30, 0, 30]
+
+# Safety: virtual obstacle radius (slide 36: 40x40cm => 20cm from center)
+# We check robot center is at least this far from ALL obstacle centers.
+VIRTUAL_OBS_HALF_CM = 21.0  # cm (matches CAPTURE_CLEARANCE in hybrid_astar.py)
+
+# Penalty weights for TSP cost (lower = preferred)
+PENALTY_CENTER = 0       # dead-center shot
+PENALTY_ANGLED = 2       # 30° off-center (still very readable)
+PENALTY_FAR = 3           # further distance
 
 
 class CellState:
-    """Base class for all objects on the arena"""
+    """Base class for all objects on the arena.
+    
+    Coordinates are in GRID units (0–19 for a 20x20 grid).
+    x, y can be floats for sub-cell precision.
+    """
 
-    def __init__(self, x, y, direction: Direction = Direction.NORTH, screenshot_id=-1, penalty=0):
+    def __init__(self, x, y, direction: Direction = Direction.NORTH,
+                 screenshot_id=-1, penalty=0, theta_rad=None):
         self.x = x
         self.y = y
         self.direction = direction
         self.screenshot_id = screenshot_id
         self.penalty = penalty
+        # Optional: continuous heading for Hybrid A* (radians, math convention)
+        self.theta_rad = theta_rad
 
     def cmp_position(self, x, y) -> bool:
         return self.x == x and self.y == y
@@ -36,211 +72,176 @@ class CellState:
         return self.x == x and self.y == y and self.direction == direction
 
     def __repr__(self):
-        return "x: {}, y: {}, d: {}, screenshot: {}".format(self.x, self.y, self.direction, self.screenshot_id)
+        return (f"x: {self.x:.1f}, y: {self.y:.1f}, d: {self.direction}, "
+                f"screenshot: {self.screenshot_id}")
 
     def set_screenshot(self, screenshot_id):
         self.screenshot_id = screenshot_id
 
     def get_dict(self):
-        return {'x': self.x, 'y': self.y, 'd': self.direction, 's': self.screenshot_id}
+        return {'x': self.x, 'y': self.y, 'd': int(self.direction),
+                's': self.screenshot_id,
+                'theta': self.theta_rad if hasattr(self, 'theta_rad') and self.theta_rad is not None else None}
 
 
 class Obstacle(CellState):
-    """Obstacle class, inherited from CellState"""
+    """Obstacle with view cone capture position generation."""
 
     def __init__(self, x: int, y: int, direction: Direction, obstacle_id: int):
         super().__init__(x, y, direction)
         self.obstacle_id = obstacle_id
 
     def __eq__(self, other):
-        return self.x == other.x and self.y == other.y and self.direction == other.direction
+        return (self.x == other.x and self.y == other.y and
+                self.direction == other.direction)
 
-    def _get_obstacle_face_center(self):
-        """Get the (x, y) of the center of the obstacle's image face."""
-        if self.direction == Direction.NORTH:
-            return (float(self.x), self.y + 0.5 + EXPANDED_CELL * 0.5)
-        elif self.direction == Direction.SOUTH:
-            return (float(self.x), self.y - 0.5 - EXPANDED_CELL * 0.5)
-        elif self.direction == Direction.EAST:
-            return (self.x + 0.5 + EXPANDED_CELL * 0.5, float(self.y))
-        elif self.direction == Direction.WEST:
-            return (self.x - 0.5 - EXPANDED_CELL * 0.5, float(self.y))
-        return (float(self.x), float(self.y))
-
-    @staticmethod
-    def _compute_micro_turn(robot_x, robot_y, robot_dir, face_x, face_y, obs_dir):
-        """Compute micro-turn angle from robot heading to obstacle face.
-
-        The robot can turn in place by any angle up to MAX_MICRO_TURN_DEG.
-        This is NOT limited by the camera FOV — the robot physically rotates
-        to point the camera at the face, then the face will be at the center
-        of the camera's view.
-
-        Checks:
-        1. Distance: face must be within camera range
-        2. Face orientation: robot must be in front of the face (not behind it)
-        3. Incidence angle: camera must look AT the face surface, not along the edge
-        4. Turn magnitude: micro-turn must be ≤ MAX_MICRO_TURN_DEG (else use grid turn)
-
-        Returns:
-            (bool, float): (can_see, signed_turn_degrees)
-                positive = turn left, negative = turn right
+    def _get_face_center_cm(self):
+        """Get face center position in cm.
+        
+        Obstacle occupies a 10x10cm cell. Its center is at
+        (x*10 + 5, y*10 + 5) cm. The image face is on one side,
+        so the face center is 5cm outward from the obstacle center.
         """
-        dx = face_x - robot_x
-        dy = face_y - robot_y
-        dist = math.sqrt(dx * dx + dy * dy)
+        cx = self.x * 10 + 5  # obstacle center in cm
+        cy = self.y * 10 + 5
+        
+        if self.direction == Direction.NORTH:
+            return cx, cy + 5
+        elif self.direction == Direction.SOUTH:
+            return cx, cy - 5
+        elif self.direction == Direction.EAST:
+            return cx + 5, cy
+        elif self.direction == Direction.WEST:
+            return cx - 5, cy
+        return cx, cy
 
-        # CHECK 1: Distance
-        if dist < 1.0 or dist > CAMERA_MAX_DIST_CELLS + 0.5:
-            return False, 0.0
-
-        # Angle from robot to face center (math convention)
-        angle_to_face = math.atan2(dy, dx)
-        robot_angle = Direction.to_angle_rad(robot_dir)
-
-        # Signed angular difference: how much the robot needs to turn
-        diff = angle_to_face - robot_angle
-        diff = (diff + math.pi) % (2 * math.pi) - math.pi
-
-        # CHECK 4: Micro-turn magnitude limit
-        if abs(diff) > MAX_MICRO_TURN_RAD:
-            return False, 0.0
-
-        # CHECK 2: Face orientation — robot must be in front of the face
-        face_normal_angle = Direction.to_angle_rad(obs_dir)
-        to_robot_angle = math.atan2(robot_y - face_y, robot_x - face_x)
-        face_diff = to_robot_angle - face_normal_angle
-        face_diff = (face_diff + math.pi) % (2 * math.pi) - math.pi
-        if abs(face_diff) > math.pi / 2:
-            return False, 0.0
-
-        # CHECK 3: Incidence angle — camera must look AT the face, not along the edge
-        # After the micro-turn, the camera points at angle_to_face.
-        # The face normal is face_normal_angle.
-        # For the face to be readable, these should be roughly opposite.
-        angle_between = angle_to_face - face_normal_angle
-        angle_between = (angle_between + math.pi) % (2 * math.pi) - math.pi
-        incidence = abs(abs(angle_between) - math.pi)
-
-        if incidence > MAX_INCIDENCE_RAD:
-            return False, 0.0
-
-        return True, math.degrees(diff)
+    def _get_face_normal_rad(self):
+        """Get the outward normal of the image face (radians, math convention)."""
+        if self.direction == Direction.NORTH:
+            return math.pi / 2      # pointing up
+        elif self.direction == Direction.SOUTH:
+            return -math.pi / 2     # pointing down
+        elif self.direction == Direction.EAST:
+            return 0.0              # pointing right
+        elif self.direction == Direction.WEST:
+            return math.pi          # pointing left
+        return 0.0
 
     def get_view_state(self, retrying) -> List['CellState']:
-        """Generate FOV-based capture positions.
-
-        For each nearby grid cell, tests all 4 cardinal robot directions.
-        The robot can micro-turn up to ±80° to point at the face.
-        Penalties scale with turn magnitude.
-
-        Returns:
-            List[CellState]: Valid capture positions sorted by penalty.
+        """Generate view cone capture candidates.
+        
+        For each (distance, angle) combination:
+        1. Position the robot along a ray from the face center
+        2. Point the robot heading BACK toward the face
+        3. Verify the incidence angle is ≤ 45°
+        4. Verify distance from all obstacles is safe
+        5. Verify position is within arena bounds
+        
+        Returns a list of CellState sorted by penalty (best first).
         """
         cells = []
-        face_x, face_y = self._get_obstacle_face_center()
-        max_dist = CAMERA_MAX_DIST_CELLS + (1 if retrying else 0)
-        search_range = max_dist + 1
-
-        for rx in range(self.x - search_range, self.x + search_range + 1):
-            for ry in range(self.y - search_range, self.y + search_range + 1):
-                if not is_valid(rx, ry):
+        face_x, face_y = self._get_face_center_cm()
+        normal_rad = self._get_face_normal_rad()
+        obs_cx = self.x * 10 + 5  # obstacle center in cm
+        obs_cy = self.y * 10 + 5
+        
+        distances = FACE_DISTANCES_CM
+        angles = APPROACH_ANGLES_DEG
+        
+        if retrying:
+            # Wider search on retry
+            distances = [20, 25, 35, 45]
+            angles = [-40, -20, 0, 20, 40]
+        
+        for face_dist in distances:
+            for angle_off in angles:
+                angle_off_rad = math.radians(angle_off)
+                
+                # 1. Robot position in cm
+                # Place robot at distance face_dist from face center,
+                # along the face normal rotated by angle_off
+                robot_x_cm = face_x + face_dist * math.cos(normal_rad + angle_off_rad)
+                robot_y_cm = face_y + face_dist * math.sin(normal_rad + angle_off_rad)
+                
+                # 2. Robot heading: point camera TOWARD the face
+                # Camera is at front of robot, so heading = direction from robot to face
+                heading_rad = math.atan2(face_y - robot_y_cm, face_x - robot_x_cm)
+                
+                # 3. Incidence angle check (should be ≤ 45°)
+                # Incidence = angle between the view ray and face normal
+                # For our parameterization, incidence ≈ |angle_off|
+                if abs(angle_off) > 45:
                     continue
-
-                for robot_dir in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
-                    can_see, turn_deg = self._compute_micro_turn(
-                        rx, ry, robot_dir, face_x, face_y, self.direction
-                    )
-                    if not can_see:
-                        continue
-
-                    abs_turn = abs(turn_deg)
-                    if abs_turn < 10:
-                        penalty = FOV_PENALTY_TINY_TURN
-                    elif abs_turn < 20:
-                        penalty = FOV_PENALTY_SMALL_TURN
-                    else:
-                        penalty = FOV_PENALTY_MEDIUM_TURN
-
-                    cells.append(CellState(
-                        rx, ry, robot_dir, self.obstacle_id, penalty
-                    ))
-
+                
+                # 4. Distance from THIS obstacle's center (safety check)
+                d_to_self = math.sqrt((robot_x_cm - obs_cx)**2 + 
+                                       (robot_y_cm - obs_cy)**2)
+                if d_to_self < VIRTUAL_OBS_HALF_CM:
+                    continue
+                
+                # 5. Arena bounds check (robot center must be ≥ 15cm from walls)
+                ROBOT_HALF_CM = 15.0
+                ARENA_CM = 200.0
+                if (robot_x_cm < ROBOT_HALF_CM or robot_x_cm > ARENA_CM - ROBOT_HALF_CM or
+                    robot_y_cm < ROBOT_HALF_CM or robot_y_cm > ARENA_CM - ROBOT_HALF_CM):
+                    continue
+                
+                # Convert to grid coordinates for CellState
+                robot_gx = robot_x_cm / 10.0
+                robot_gy = robot_y_cm / 10.0
+                
+                # 6. Snap heading to nearest cardinal Direction for grid compatibility
+                # AND store the exact theta for Hybrid A*
+                heading_deg = math.degrees(heading_rad)
+                heading_deg = heading_deg % 360
+                
+                # Map to nearest cardinal direction
+                if 45 <= heading_deg < 135:
+                    cardinal = Direction.NORTH
+                elif 135 <= heading_deg < 225:
+                    cardinal = Direction.WEST
+                elif 225 <= heading_deg < 315:
+                    cardinal = Direction.SOUTH
+                else:
+                    cardinal = Direction.EAST
+                
+                # 7. Penalty: center is best, angled slightly worse, far slightly worse
+                penalty = 0
+                if abs(angle_off) > 5:
+                    penalty += PENALTY_ANGLED
+                if face_dist > 30:
+                    penalty += PENALTY_FAR
+                
+                cell = CellState(
+                    robot_gx, robot_gy, cardinal,
+                    self.obstacle_id, penalty,
+                    theta_rad=heading_rad
+                )
+                cells.append(cell)
+        
         cells.sort(key=lambda c: c.penalty)
-
-        MAX_CANDIDATES = 16
+        
+        # Limit to best candidates to keep TSP tractable
+        MAX_CANDIDATES = 8
         if len(cells) > MAX_CANDIDATES:
             cells = cells[:MAX_CANDIDATES]
-
-        if not cells:
-            cells = self._get_legacy_view_state(retrying)
-
-        return cells
-
-    def _get_legacy_view_state(self, retrying) -> List['CellState']:
-        """Original head-on positions as fallback."""
-        cells = []
-        if self.direction == Direction.NORTH:
-            if not retrying:
-                if is_valid(self.x, self.y + 1 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y + 1 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 5))
-                if is_valid(self.x, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y + 2 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 0))
-            else:
-                if is_valid(self.x, self.y + 2 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y + 2 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 0))
-                if is_valid(self.x, self.y + 3 + EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y + 3 + EXPANDED_CELL * 2, Direction.SOUTH, self.obstacle_id, 0))
-        elif self.direction == Direction.SOUTH:
-            if not retrying:
-                if is_valid(self.x, self.y - 1 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y - 1 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 5))
-                if is_valid(self.x, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y - 2 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 0))
-            else:
-                if is_valid(self.x, self.y - 2 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y - 2 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 0))
-                if is_valid(self.x, self.y - 3 - EXPANDED_CELL * 2):
-                    cells.append(CellState(self.x, self.y - 3 - EXPANDED_CELL * 2, Direction.NORTH, self.obstacle_id, 0))
-        elif self.direction == Direction.EAST:
-            if not retrying:
-                if is_valid(self.x + 1 + EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x + 1 + EXPANDED_CELL * 2, self.y, Direction.WEST, self.obstacle_id, 5))
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2, self.y, Direction.WEST, self.obstacle_id, 0))
-            else:
-                if is_valid(self.x + 2 + EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x + 2 + EXPANDED_CELL * 2, self.y, Direction.WEST, self.obstacle_id, 0))
-                if is_valid(self.x + 3 + EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x + 3 + EXPANDED_CELL * 2, self.y, Direction.WEST, self.obstacle_id, 0))
-        elif self.direction == Direction.WEST:
-            if not retrying:
-                if is_valid(self.x - 1 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 1 - EXPANDED_CELL * 2, self.y, Direction.EAST, self.obstacle_id, 5))
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2, self.y, Direction.EAST, self.obstacle_id, 0))
-            else:
-                if is_valid(self.x - 2 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 2 - EXPANDED_CELL * 2, self.y, Direction.EAST, self.obstacle_id, 0))
-                if is_valid(self.x - 3 - EXPANDED_CELL * 2, self.y):
-                    cells.append(CellState(self.x - 3 - EXPANDED_CELL * 2, self.y, Direction.EAST, self.obstacle_id, 0))
+        
         return cells
 
 
 class Grid:
+    """Arena grid with obstacles."""
+    
     def __init__(self, size_x: int, size_y: int):
         self.size_x = size_x
         self.size_y = size_y
         self.obstacles: List[Obstacle] = []
 
     def add_obstacle(self, obstacle: Obstacle):
-        to_add = True
         for ob in self.obstacles:
             if ob == obstacle:
-                to_add = False
-                break
-        if to_add:
-            self.obstacles.append(obstacle)
+                return
+        self.obstacles.append(obstacle)
 
     def reset_obstacles(self):
         self.obstacles = []
@@ -248,40 +249,53 @@ class Grid:
     def get_obstacles(self):
         return self.obstacles
 
-    def reachable(self, x: int, y: int, turn=False, preTurn=False) -> bool:
-        if not self.is_valid_coord(x, y):
-            return False
-        for ob in self.obstacles:
-            if ob.x == 4 and ob.y <= 4 and x < 4 and y < 4:
-                continue
-            if abs(ob.x - x) + abs(ob.y - y) >= 4:
-                continue
-            if turn:
-                if max(abs(ob.x - x), abs(ob.y - y)) < EXPANDED_CELL * 2 + 1:
-                    return False
-            if preTurn:
-                if max(abs(ob.x - x), abs(ob.y - y)) < EXPANDED_CELL * 2 + 1:
-                    return False
-            else:
-                if max(abs(ob.x - x), abs(ob.y - y)) < 2:
-                    return False
-        return True
-
-    def is_valid_coord(self, x: int, y: int) -> bool:
-        if x < 1 or x >= self.size_x - 1 or y < 1 or y >= self.size_y - 1:
-            return False
-        return True
-
-    def is_valid_cell_state(self, state: CellState) -> bool:
-        return self.is_valid_coord(state.x, state.y)
+    def is_valid_coord(self, x, y) -> bool:
+        return (1 <= x <= self.size_x - 2 and 1 <= y <= self.size_y - 2)
 
     def get_view_obstacle_positions(self, retrying) -> List[List[CellState]]:
-        optimal_positions = []
+        """Get valid capture candidates for each obstacle.
+        
+        Filters out candidates that are:
+        - Inside another obstacle's virtual safety zone (40x40cm = 2 grid units)
+        - Outside arena bounds
+        """
+        all_positions = []
+        
         for obstacle in self.obstacles:
-            if obstacle.direction == 8:
+            if obstacle.direction == Direction.SKIP:
                 continue
-            else:
-                view_states = [vs for vs in obstacle.get_view_state(retrying)
-                              if self.reachable(vs.x, vs.y)]
-            optimal_positions.append(view_states)
-        return optimal_positions
+            
+            candidates = obstacle.get_view_state(retrying)
+            
+            # Filter against OTHER obstacles' safety zones
+            valid = []
+            for cand in candidates:
+                cand_x_cm = cand.x * 10  # grid to cm (left edge)
+                cand_y_cm = cand.y * 10
+                
+                blocked = False
+                for other in self.obstacles:
+                    if other.obstacle_id == obstacle.obstacle_id:
+                        continue
+                    
+                    # Other obstacle center in cm
+                    other_cx = other.x * 10 + 5
+                    other_cy = other.y * 10 + 5
+                    
+                    # Robot center in cm (cand.x/y are already center in grid)
+                    robot_cx = cand.x * 10
+                    robot_cy = cand.y * 10
+                    
+                    dist = math.sqrt((robot_cx - other_cx)**2 + 
+                                     (robot_cy - other_cy)**2)
+                    
+                    if dist < VIRTUAL_OBS_HALF_CM + 5:  # 26cm minimum clearance from other obstacles
+                        blocked = True
+                        break
+                
+                if not blocked:
+                    valid.append(cand)
+            
+            all_positions.append(valid)
+        
+        return all_positions

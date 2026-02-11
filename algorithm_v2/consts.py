@@ -41,11 +41,26 @@ MOVE_DIRECTION = [
     (0, -1, Direction.SOUTH),
 ]
 
-# TURN_FACTOR: cost multiplier for 90-degree turns in A* search.
-# Higher value = planner strongly avoids 90-degree turns, preferring
-# straighter paths that use micro-turns for capture instead.
-# Original was 1 (turns almost free). Now 4 (a 90° turn costs 8, vs 1 per cell move).
-TURN_FACTOR = 4
+# ============================================================================
+# TURN_FACTOR: How expensive a 90° turn is relative to moving 1 cell (10cm).
+#
+# The A* cost formula is: rotation_cost * TURN_FACTOR + 1 + safe_cost
+#   - Straight move:  cost = 0*TF + 1 = 1
+#   - 90° turn move:  cost = 2*TF + 1
+#
+# TUNING GUIDE (measure your real robot):
+#   1. Time how long 10cm straight takes (e.g., 0.5s)
+#   2. Time how long a 90° turn takes (e.g., 2.0s)
+#   3. TURN_FACTOR = (turn_seconds / straight_seconds - 1) / 2
+#      Example: (2.0/0.5 - 1) / 2 = 1.5
+#
+# Values:
+#   TF=1:   turn costs 3x a straight (fast turns)
+#   TF=2:   turn costs 5x (moderate)
+#   TF=3:   turn costs 7x (default - balanced)
+#   TF=4+:  turn costs 9x+ (very slow turns, avoids them heavily)
+# ============================================================================
+TURN_FACTOR = 3
 
 EXPANDED_CELL = 1
 
@@ -70,6 +85,6 @@ CAMERA_HALF_FOV_RAD = CAMERA_HFOV_RAD / 2.0
 CAMERA_MAX_DIST_CELLS = 3
 
 # Penalties based on micro-turn angle needed (must be low vs movement costs)
-FOV_PENALTY_TINY_TURN = 0    # < 10 degrees off-axis
+FOV_PENALTY_TINY_TURN = 0    # < 10 degrees
 FOV_PENALTY_SMALL_TURN = 1   # 10-20 degrees
-FOV_PENALTY_MEDIUM_TURN = 3  # 20-31 degrees
+FOV_PENALTY_MEDIUM_TURN = 3  # 20-80 degrees
