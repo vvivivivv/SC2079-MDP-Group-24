@@ -44,7 +44,9 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
- TIM_HandleTypeDef htim2;
+ I2C_HandleTypeDef hi2c2;
+
+TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim9;
@@ -64,6 +66,13 @@ osThreadId_t EncoderTaskHandle;
 const osThreadAttr_t EncoderTask_attributes = {
   .name = "EncoderTask",
   .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for readICMTask */
+osThreadId_t readICMTaskHandle;
+const osThreadAttr_t readICMTask_attributes = {
+  .name = "readICMTask",
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
@@ -104,6 +113,10 @@ const osThreadAttr_t executeCommandTask_attributes = {
   .priority = (osPriority_t) osPriorityLow,
 };
 
+// icm20948 (gyro)
+#define ICM20948_I2C_ADDR   (0x68 << 1)
+volatile float gyro_z_dps = 0.0f;
+
 // Servo constants
 const int SERVO_STRAIGHT = 172;
 const int SERVO_LEFT_MAX = 95;
@@ -111,13 +124,11 @@ const int SERVO_LEFT = 120;
 const int SERVO_RIGHT = 240;
 const int SERVO_RIGHT_MAX = 249; // PROBABLY CAN GO HIGHER, BUT NOT TESTED
 
-
 // variables for communication with pi via UART
 #define MAX_BUF_SIZE 20
 volatile uint8_t command_buf[MAX_BUF_SIZE];
 volatile char uart_input;
 volatile int command_len = 0;
-
 
 typedef struct {
 	uint8_t command[20];
@@ -129,6 +140,7 @@ typedef struct {
 // public variables for multi threading
 volatile uint8_t display_buf[20];
 volatile uint8_t display_buf2[20];
+volatile uint8_t display_buf3[20];
 volatile int ready_execute = 1; // set to 0 when executing a command, so future commands are queued.
 volatile int ready_parse = 0;
 
@@ -152,8 +164,10 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM9_Init(void);
+static void MX_I2C2_Init(void);
 void StartDefaultTask(void *argument);
 void encoder(void *argument);
+void readICM(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -176,19 +190,21 @@ void display(uint8_t* str, int buf_no){
 	else if (buf_no == 2){
 		strncpy(display_buf2, (const char*) str, MAX_BUF_SIZE); //get rid of volatile compilation warning
 	}
+	else if (buf_no == 3){
+		strncpy(display_buf3, (const char*) str, MAX_BUF_SIZE); //get rid of volatile compilation warning
+	}
 	return;
 }
 
 void send(uint8_t* str){
-	// TODO: UNTESTED
 	HAL_UART_Transmit(&huart3, (uint8_t *) str, sizeof(str), 0xFFFF);
 }
 
 void display_thread(void* args){
 	uint8_t buf[20];
 	uint8_t buf2[20];
+	uint8_t buf3[20];
 
-	//int i =0;
 	for (;;){
 		strncpy(buf, (const char*)display_buf, MAX_BUF_SIZE); //get rid of volatile compilation warning
 		//sprintf(buf, "testing %s\0", display_buf);
@@ -197,6 +213,9 @@ void display_thread(void* args){
 
 		strncpy(buf2, (const char*)display_buf2, MAX_BUF_SIZE); //get rid of volatile compilation warning
 		OLED_ShowString(10, 20, buf2);
+
+		strncpy(buf3, (const char*)display_buf3, MAX_BUF_SIZE); //get rid of volatile compilation warning
+		OLED_ShowString(10, 30, buf3);
 
 		OLED_Refresh_Gram();
 		osDelay(100);
@@ -303,6 +322,30 @@ void turn(int value){
 	htim12.Instance->CCR1 = value; // straight
 }
 
+void icm20948_init(void){
+    uint8_t data;
+
+    // Wake up
+    data = 0x01;
+    HAL_I2C_Mem_Write(&hi2c2, ICM20948_I2C_ADDR, 0x06, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+
+    // Enable accel & gyro
+    data = 0x00;
+    HAL_I2C_Mem_Write(&hi2c2, ICM20948_I2C_ADDR, 0x07, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+
+    // Disable ICM internal I2C master (required for BYPASS)
+	data = 0x00; // USER_CTRL (0x03)
+	HAL_I2C_Mem_Write(&hi2c2, ICM20948_I2C_ADDR, 0x03, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+
+	// Enable BYPASS so MCU can talk to AK09916 at 0x0C
+	data = 0x02; // INT_PIN_CFG (0x0F): BYPASS_EN=1
+	HAL_I2C_Mem_Write(&hi2c2, 0x68<<1, 0x0F, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+
+	// Put AK09916 into continuous mode (e.g., 100 Hz)
+	data = 0x08; // CNTL2 (0x31): 100 Hz
+	HAL_I2C_Mem_Write(&hi2c2, 0x0C<<1, 0x31, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
 	/* This function is (automatically?) called upon interrupt when getting input via the UART i think */
 	//TODO: completely untested
@@ -385,11 +428,8 @@ void execute_command_thread(void* args){
 	char tmp[20];
 	char command[4]; // hard force command to only be 3 characters long
 	int value;
-
-
 	const char *commands[] = {"FWD\0", "BCK\0", "LFT\0", "RGT\0"
 			, "FWL\0", "FWR\0", "BKL\0", "BKR\0"};
-
 
 	Command cmd;
 
@@ -516,6 +556,7 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM9_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   OLED_Init();
   IR_Sensors_Init();
@@ -567,6 +608,9 @@ int main(void)
 
   /* creation of EncoderTask */
   EncoderTaskHandle = osThreadNew(encoder, NULL, &EncoderTask_attributes);
+
+  /* creation of readICMTask */
+  readICMTaskHandle = osThreadNew(readICM, NULL, &readICMTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -636,6 +680,40 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C2_Init(void)
+{
+
+  /* USER CODE BEGIN I2C2_Init 0 */
+
+  /* USER CODE END I2C2_Init 0 */
+
+  /* USER CODE BEGIN I2C2_Init 1 */
+
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 400000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C2_Init 2 */
+
+  /* USER CODE END I2C2_Init 2 */
+
 }
 
 /**
@@ -1093,6 +1171,156 @@ void encoder(void *argument)
 	  osDelay(1); // idk why but it breaks if theres no delay.
   }
   /* USER CODE END encoder */
+}
+
+/* USER CODE BEGIN Header_readICM */
+/**
+* @brief Function implementing the readICMTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_readICM */
+void readICM(void *argument)
+{
+  /* USER CODE BEGIN readICM */
+
+	// https://invensense.tdk.com/wp-content/uploads/2016/06/DS-000189-ICM-20948-v1.3.pdf
+
+	uint8_t z_reg_addr = 0x37;    // start from GYRO_ZOUT_H
+	uint8_t y_reg_addr = 0x35;
+	uint8_t x_reg_addr = 0x33;
+	uint8_t rawData[2];         // to store MSB and LSB
+	int16_t gyro_x_raw, gyro_y_raw, gyro_z_raw;
+	float gyro_z_dps;
+	float gyro_bias = 0.0f;
+
+	float theta = 0.0f;
+
+	char buf[20];
+	char buf2[20];
+//	int a;
+	uint32_t currentTick;
+
+	icm20948_init();
+	osDelay(1000); //delay to make sure ICM 20948 power up
+
+	uint32_t lastTick;
+
+	/*
+	display("Calibrating...", 1);
+
+	const int samples = 1000;
+	float sum = 0;
+
+	for(int i = 0; i < samples; i++)
+	{
+	HAL_I2C_Master_Transmit(&hi2c2, 0x68 << 1, &z_reg_addr, 1, 100);
+	HAL_I2C_Master_Receive(&hi2c2, 0x68 << 1, rawData, 2, 100);
+
+	gyro_z_raw = (int16_t)((rawData[0] << 8) | rawData[1]);
+	gyro_z_dps = gyro_z_raw / 131.0f;   // convert to deg/sec
+
+	sum += gyro_z_dps;
+	osDelay(2);
+	}
+
+	gyro_bias = sum / samples;
+
+	sprintf(buf, "bias %d", gyro_bias);
+	display(buf, 1);
+	osDelay(1000);
+	*/
+
+	lastTick = HAL_GetTick();
+
+  /* Infinite loop */
+  for(;;)
+  {
+
+	  // -------------- Gyroscope Readings ---------------------------------------
+	// Read Z axis
+	// send a byte to trigger read operation?
+	if(HAL_I2C_Master_Transmit(&hi2c2, 0x68 << 1, &z_reg_addr, 1, 1000)!= HAL_OK){
+		OLED_ShowString(10, 40, "ERROR 0");
+	}
+	// Read 2 hex bytes (MSB + LSB)
+	if (HAL_I2C_Master_Receive(&hi2c2, 0x68 << 1, rawData, 2, 1000)!=HAL_OK){
+		OLED_ShowString(10, 40, "ERROR 1");
+	}
+	// Combine into signed 16-bit value
+	gyro_z_raw = (int16_t)((rawData[0] << 8) | rawData[1]);
+	gyro_z_dps = gyro_z_raw / 131.0f; // convert to degrees per sec
+
+	if(fabs(gyro_z_dps) < 0.5f){ // noise?
+		gyro_z_dps = 0.0f;
+	}
+
+	currentTick = HAL_GetTick();
+	theta += gyro_z_dps * ((currentTick - lastTick) / 1000.0f);
+	lastTick = currentTick;
+
+	//sprintf(buf, "%d", theta);
+	//display(buf, 1);
+	if (theta < 35.0f) {
+		display("LESS", 1);
+	}else {
+		display("MORE", 1);
+	}
+
+	sprintf(buf2, "%d", gyro_z_raw);
+	display(buf2, 3);
+
+
+	/*
+	// Read Y axis
+	if(HAL_I2C_Master_Transmit(&hi2c2, 0x68 << 1, &y_reg_addr, 1, 1000)!= HAL_OK){
+		OLED_ShowString(10, 40, "ERROR 0");
+	}
+	if (HAL_I2C_Master_Receive(&hi2c2, 0x68 << 1, rawData, 2, 1000)!=HAL_OK){
+		OLED_ShowString(10, 40, "ERROR 1");
+	}
+	gyro_y_raw = (int16_t)((rawData[0] << 8) | rawData[1]);
+
+	// Read X axis
+	if(HAL_I2C_Master_Transmit(&hi2c2, 0x68 << 1, &x_reg_addr, 1, 1000)!= HAL_OK){
+		OLED_ShowString(10, 40, "ERROR 0");
+	}
+	if (HAL_I2C_Master_Receive(&hi2c2, 0x68 << 1, rawData, 2, 1000)!=HAL_OK){
+		OLED_ShowString(10, 40, "ERROR 1");
+	}
+	gyro_x_raw = (int16_t)((rawData[0] << 8) | rawData[1]);
+
+	/*
+	if(fabs(gyro_z_raw) < 0.5f){
+		gyro_z_raw = 0.0f;
+	}
+	*/
+
+	/*
+	// Integration for angle
+	if(isTurning){
+		currentTime = HAL_GetTick();
+		sprintf(buf4, "%d", gyro_z_raw);
+		deltaTime = currentTime - lastAngleUpdateTime;
+		if(deltaTime > 0){
+			currentAngle += gyro_z_dps * (deltaTime / 1000.0f);
+			lastAngleUpdateTime = currentTime;
+		}
+	}
+	*/
+	//format for OLED display
+//	a = gyro_z_dps;
+//	sprintf(buf, "%d\n", a);
+//	OLED_ShowString(10, 20, buf);
+//	HAL_UART_Transmit(&huart3,(uint8_t *)buf,strlen(buf),0xFFFF);
+	// ------------------ End of Gyroscope Readings -------------------------------
+
+//	sprintf(buf, "%3d", a);
+//	OLED_ShowString(10, 20, buf);
+	osDelay(10);
+
+  }
+  /* USER CODE END readICM */
 }
 
 /**
