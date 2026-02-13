@@ -219,6 +219,15 @@ class Robot:
             else: self.ghost_path.append((px * 10 + 5, py * 10 + 5))
         self.is_running = True; self.current_cmd_idx = 0
 
+    def execute_manual_command(self, cmd_str):
+        """Injects a single command and executes it immediately."""
+        self.commands = [cmd_str]
+        self.is_running = True
+        self.current_cmd_idx = 0
+        self.state = "IDLE" # Will trigger _decode_command on next update loop
+        self.path_history = [(self.x, self.y)] # Optional: Reset path or keep it
+        print(f"Executing Manual Command: {cmd_str}")
+
     # =========================================================================
     # NEW: ACKERMANN PHYSICS ENGINE
     # =========================================================================
@@ -427,6 +436,7 @@ def main():
         start_btn = pygame.Rect(ARENA_WIDTH + 20, 450, 160, 40)
         restart_btn = pygame.Rect(ARENA_WIDTH + 20, 500, 160, 40)
         reset_btn = pygame.Rect(ARENA_WIDTH + 20, 550, 160, 40)
+        manual_btn  = pygame.Rect(ARENA_WIDTH + 20, 600, 160, 40)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT: running = False
@@ -563,6 +573,19 @@ def main():
                     if robot.has_cached_mission():
                         robot.reset_all() # Clear cache if obstacles change
 
+                # ========== MANUAL CMD BUTTON ==========
+                elif manual_btn.collidepoint(mouse_x, mouse_y):
+                    root = tkinter.Tk()
+                    root.withdraw()
+                    # Ask user for input (e.g., "FW20" or "FL39")
+                    cmd_input = simpledialog.askstring("Manual Command", "Enter Command (e.g. FW20, FL39, SNAP1_C):")
+                    root.destroy()
+
+                    if cmd_input:
+                        # Clean up input: Uppercase and remove spaces
+                        clean_cmd = cmd_input.strip().upper().replace(" ", "")
+                        robot.execute_manual_command(clean_cmd)
+
         if robot.is_running:
             scanned_id = robot.update()
             if start_time: elapsed_time = time.time() - start_time
@@ -615,6 +638,11 @@ def main():
         pygame.draw.rect(screen, RED, reset_btn)
         pygame.draw.rect(screen, BLACK, reset_btn, 2)
         screen.blit(font.render("RESET", True, WHITE), (ARENA_WIDTH + 55, 560))
+
+        # Draw Manual Button
+        pygame.draw.rect(screen, PURPLE, manual_btn)
+        pygame.draw.rect(screen, BLACK, manual_btn, 2)
+        screen.blit(font.render("MANUAL CMD", True, WHITE), (ARENA_WIDTH + 30, 610))
 
         pygame.display.flip()
         clock.tick(FPS)
