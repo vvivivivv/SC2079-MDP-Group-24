@@ -10,11 +10,13 @@ from enum import Enum
 # Used for: Differential drive kinematics in simulator & Hybrid A*
 ROBOT_AXLE_TRACK_CM = 16.0  
 
+ROBOT_WHEELBASE_CM = 20.0  # Distance from front axle to rear axle (Measure this!)
+
 # Minimum turning radius (cm)
 # Used for: Reeds-Shepp paths & Hybrid A* collision checking
 # Calculate as: ROBOT_AXLE_TRACK_CM / 2 * (MaxSpeed + MinSpeed) / (MaxSpeed - MinSpeed)
 # OR just measure it empirically by driving in a circle.
-ROBOT_TURN_RADIUS_CM = 25.0
+ROBOT_TURN_RADIUS_CM = 25
 
 # Robot Speed (cm/s)
 # Used for: Physics integration step size

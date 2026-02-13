@@ -29,7 +29,7 @@ from consts import (
 # =============================================================================
 # PARAMETERS
 # =============================================================================
-TURN_RADIUS_CM = 25.0        # Minimum turning radius (calibrate to your robot!)
+TURN_RADIUS_CM = ROBOT_TURN_RADIUS_CM      # Minimum turning radius (calibrate to your robot!)
 STEP_SIZE_CM = 8.0            # Distance per step (reduced from 10 for finer resolution)
 ARENA_SIZE_CM = 200.0         # Arena size (20x20 grid x 10cm)
 ROBOT_CLEARANCE_CM = 15.0     # Robot half-diagonal (~14.1cm) + margin
@@ -353,24 +353,20 @@ def path_to_commands(path):
             commands.append(f"BW{dist}")
 
         elif move_type == 'L':
-            total_deg = round(step_angle_deg * count)
             total_arc = round(step_arc_len * count)
-            commands.append(f"FL{total_deg:03d}_{total_arc:03d}")
+            commands.append(f"FL{total_arc}")
 
         elif move_type == 'R':
-            total_deg = round(step_angle_deg * count)
             total_arc = round(step_arc_len * count)
-            commands.append(f"FR{total_deg:03d}_{total_arc:03d}")
+            commands.append(f"FR{total_arc}")
 
         elif move_type == 'BL':
-            total_deg = round(step_angle_deg * count)
             total_arc = round(step_arc_len * count)
-            commands.append(f"BL{total_deg:03d}_{total_arc:03d}")
+            commands.append(f"BL{total_arc}")
 
         elif move_type == 'BR':
-            total_deg = round(step_angle_deg * count)
             total_arc = round(step_arc_len * count)
-            commands.append(f"BR{total_deg:03d}_{total_arc:03d}")
+            commands.append(f"BR{total_arc}")
 
     return commands
 

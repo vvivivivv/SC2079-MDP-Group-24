@@ -6,7 +6,7 @@ import time
 import requests
 import tkinter
 from tkinter import filedialog, simpledialog
-from consts import ROBOT_SPEED_CM_S, ROBOT_AXLE_TRACK_CM, ROBOT_TURN_RADIUS_CM
+from consts import ROBOT_SPEED_CM_S, ROBOT_AXLE_TRACK_CM, ROBOT_TURN_RADIUS_CM, ROBOT_WHEELBASE_CM
 
 # =============================================================================
 # 1. LIVE TUNING VARIABLES (GLOBALS)
@@ -163,21 +163,25 @@ class Robot:
     def __init__(self, x, y, theta):
         self.x = x; self.y = y; self.theta = theta 
         
-        # 1. ACTUAL CURRENT START (Used by RESTART button)
+        # Save start/default positions for Reset/Restart functionality
         self.start_x = x; self.start_y = y; self.start_theta = theta
-        
-        # 2. FACTORY DEFAULT (Used by RESET button)
         self.default_x = x; self.default_y = y; self.default_theta = theta
 
-        self.is_running = False; self.commands = []     
-        self._cached_commands = [] # For Replay
-        self.ghost_path = []; self.path_history = [(x, y)]
+        self.is_running = False
+        self.commands = []     
+        self._cached_commands = []
+        self.ghost_path = []
+        self.path_history = [(x, y)]
         self.current_cmd_idx = 0
         self.state = "IDLE"
         self.target_val = 0; self.traveled_val = 0
         self.pause_end_time = 0
-        self.vl = 0.0; self.vr = 0.0 
         
+        # --- ACKERMANN VARIABLES ---
+        self.velocity = 0.0        # cm/s (Single speed for the whole car)
+        self.steering_angle = 0.0  # radians (Positive = Left, Negative = Right)
+        
+        # Visual assets
         scale = ARENA_WIDTH / GRID_SIZE
         size_px = int(ROBOT_SIZE_CM * scale)
         self.original_surf = pygame.Surface((size_px, size_px), pygame.SRCALPHA)
@@ -185,61 +189,44 @@ class Robot:
         w, h = size_px, size_px
         pygame.draw.line(self.original_surf, YELLOW, (w/2, h/2), (w, h/2), 3)
 
+    # (Keep reset_position, reset_all, has_cached_mission, start_from_cache, start_mission exactly as they were)
     def reset_position(self):
-        """RESTART: Go back to the Start of the CURRENT mission (User Set Point)."""
-        self.x = self.start_x
-        self.y = self.start_y
-        self.theta = self.start_theta
-        
-        self.is_running = False
-        self.path_history = [(self.x, self.y)]
+        self.x = self.start_x; self.y = self.start_y; self.theta = self.start_theta
+        self.is_running = False; self.path_history = [(self.x, self.y)]
         self.current_cmd_idx = 0; self.state = "IDLE"
-        self.vl = 0; self.vr = 0
+        self.velocity = 0; self.steering_angle = 0
 
     def reset_all(self):
-        """RESET: Go back to FACTORY DEFAULT (1.5, 1.5) and clear obstacles/cache."""
-        # Restore the default start position
-        self.start_x = self.default_x
-        self.start_y = self.default_y
-        self.start_theta = self.default_theta
-        
-        # Now reset position using those restored defaults
+        self.start_x = self.default_x; self.start_y = self.default_y; self.start_theta = self.default_theta
         self.reset_position()
-        
-        self.commands = []
-        self._cached_commands = []
-        self.ghost_path = []
+        self.commands = []; self._cached_commands = []; self.ghost_path = []
 
-    def has_cached_mission(self):
-        return len(self._cached_commands) > 0
+    def has_cached_mission(self): return len(self._cached_commands) > 0
 
     def start_from_cache(self):
-        """Start mission using cached commands (no API call needed)."""
         self.reset_position()
         self.commands = list(self._cached_commands)
-        self.is_running = True
-        self.current_cmd_idx = 0
-        print(f"Starting from cache ({len(self.commands)} commands)")
+        self.is_running = True; self.current_cmd_idx = 0
 
     def start_mission(self, api_data):
         self.commands = api_data.get('commands', [])
-        self._cached_commands = list(self.commands) # Save cache
-        
+        self._cached_commands = list(self.commands)
         raw_path = api_data.get('path', [])
         self.ghost_path = []
         for p in raw_path:
-            px = p['x']
-            py = p['y']
-            if isinstance(px, float):
-                self.ghost_path.append((px * 10, py * 10))
-            else:
-                self.ghost_path.append((px * 10 + 5, py * 10 + 5))
+            px = p['x']; py = p['y']
+            if isinstance(px, float): self.ghost_path.append((px * 10, py * 10))
+            else: self.ghost_path.append((px * 10 + 5, py * 10 + 5))
         self.is_running = True; self.current_cmd_idx = 0
 
+    # =========================================================================
+    # NEW: ACKERMANN PHYSICS ENGINE
+    # =========================================================================
     def update(self):
         if not self.is_running: return None
         dt = 1.0 / FPS 
 
+        # 1. Handle SNAP (Scanning)
         if self.state == "SCANNING":
             if time.time() > self.pause_end_time:
                 self.state = "IDLE"
@@ -250,6 +237,7 @@ class Robot:
             else:
                 return None
 
+        # 2. Handle IDLE (Fetch next command)
         if self.state == "IDLE":
             if self.current_cmd_idx >= len(self.commands):
                 self.is_running = False
@@ -258,32 +246,34 @@ class Robot:
             cmd = self.commands[self.current_cmd_idx]
             self._decode_command(cmd)
 
-        # Physics Integration
-        v = (self.vl + self.vr) / 2.0
-        omega = (self.vr - self.vl) / ROBOT_AXLE_TRACK 
+        # 3. PHYSICS: BICYCLE MODEL
+        # x_dot = v * cos(theta)
+        # y_dot = v * sin(theta)
+        # theta_dot = (v / L) * tan(delta)
+        
+        self.x += self.velocity * math.cos(math.radians(self.theta)) * dt
+        self.y += self.velocity * math.sin(math.radians(self.theta)) * dt
+        
+        if abs(self.steering_angle) > 0.001:
+            # Calculate angular velocity (degrees per second)
+            angular_velocity = (self.velocity / ROBOT_WHEELBASE_CM) * math.tan(self.steering_angle)
+            self.theta += math.degrees(angular_velocity * dt)
 
-        self.x += v * math.cos(math.radians(self.theta)) * dt
-        self.y += v * math.sin(math.radians(self.theta)) * dt
-        self.theta += math.degrees(omega * dt) 
-
-        if abs(v) > 0 or abs(omega) > 0:
+        # Update History
+        if abs(self.velocity) > 0:
             self.path_history.append((self.x, self.y))
 
-        # Check termination condition for current move
+        # 4. Check Termination (Distance Traveled)
         if self.state == "MOVING":
-            self.traveled_val += abs(v * dt)
+            self.traveled_val += abs(self.velocity * dt)
             if self.traveled_val >= self.target_val:
                 self._stop_motors()
         
-        elif self.state == "TURNING":
-            self.traveled_val += abs(math.degrees(omega * dt))
-            if self.traveled_val >= self.target_val:
-                self._stop_motors()
-                
         return None
 
     def _stop_motors(self):
-        self.vl = 0; self.vr = 0
+        self.velocity = 0
+        self.steering_angle = 0
         self.state = "IDLE"; self.current_cmd_idx += 1
 
     def _decode_command(self, cmd):
@@ -291,78 +281,82 @@ class Robot:
         print(f"Processing: {cmd}")
         self.traveled_val = 0
         
-        PLANNER_TURN_RADIUS = ROBOT_TURN_RADIUS_CM
+        # Calculate Steering Angle required for the fixed Turn Radius
+        # tan(delta) = Wheelbase / Radius
+        # delta = atan(Wheelbase / Radius)
+        req_steering_rad = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_CM)
         
-        # 1. ARC MOVES (FR / FL)
-        if cmd[:2] in ["FR", "FL", "BR", "BL"]:  # Check first 2 chars
+        # ==========================
+        # 1. ARC MOVES (FL, FR, BL, BR)
+        if cmd[:2] in ["FR", "FL", "BR", "BL"]:
             try:
-                parts = cmd[2:].split('_')
-                if len(parts) == 2:
-                    dist_cm = int(parts[1])
+                # === NEW PARSING LOGIC ===
+                # Extract everything after the first 2 letters
+                raw_suffix = cmd[2:]
+                
+                if '_' in raw_suffix:
+                    # Old Format (e.g., "FL090_039") -> Split and take the second part
+                    dist_cm = int(raw_suffix.split('_')[1])
                 else:
-                    dist_cm = 20
+                    # New Format (e.g., "FL39") -> The whole suffix is the distance
+                    dist_cm = int(raw_suffix)
+                # =========================
 
                 self.target_val = dist_cm
-                self.state = "MOVING" # Treat arcs as moving distance for termination
+                self.state = "MOVING"
 
-                R = PLANNER_TURN_RADIUS 
-                half_track = ROBOT_AXLE_TRACK / 2.0
-                
-                # Calculate wheel speeds for a turn
-                v_outer = CURRENT_SPEED * (R + half_track) / R
-                v_inner = CURRENT_SPEED * (R - half_track) / R
-
-                # FORWARD LEFT (FL)
+                # Forward Left: Positive Speed, Positive Steer (Left)
                 if cmd.startswith("FL"):
-                    self.vl = v_inner
-                    self.vr = v_outer 
+                    self.velocity = CURRENT_SPEED
+                    self.steering_angle = req_steering_rad 
 
-                # FORWARD RIGHT (FR)
+                # Forward Right: Positive Speed, Negative Steer (Right)
                 elif cmd.startswith("FR"):
-                    self.vl = v_outer
-                    self.vr = v_inner
-                
-                # BACKWARD LEFT (BL) - Reverse of FL
-                elif cmd.startswith("BL"):
-                    self.vl = -v_inner  # Negative speed
-                    self.vr = -v_outer
+                    self.velocity = CURRENT_SPEED
+                    self.steering_angle = -req_steering_rad
 
-                # BACKWARD RIGHT (BR) - Reverse of FR
+                # Backward Left: Negative Speed, Positive Steer (Front wheels point Left)
+                elif cmd.startswith("BL"):
+                    self.velocity = -CURRENT_SPEED
+                    self.steering_angle = req_steering_rad
+
+                # Backward Right: Negative Speed, Negative Steer (Front wheels point Right)
                 elif cmd.startswith("BR"):
-                    self.vl = -v_outer  # Negative speed
-                    self.vr = -v_inner
+                    self.velocity = -CURRENT_SPEED
+                    self.steering_angle = -req_steering_rad
                     
             except ValueError:
+                print(f"Error parsing command: {cmd}")
                 self.state = "IDLE"; self.current_cmd_idx += 1
             return
 
-        # 2. STRAIGHT MOVES (FW / BW)
+        # ==========================
+        # 2. STRAIGHT MOVES (FW, BW)
+        # ==========================
         elif cmd.startswith("FW"):
             try: val = int(cmd[2:])
             except: val = 10
             self.target_val = val; self.state = "MOVING"
-            self.vl = CURRENT_SPEED; self.vr = CURRENT_SPEED
+            self.velocity = CURRENT_SPEED
+            self.steering_angle = 0.0
 
         elif cmd.startswith("BW"):
             try: val = int(cmd[2:])
             except: val = 10
             self.target_val = val; self.state = "MOVING"
-            self.vl = -CURRENT_SPEED; self.vr = -CURRENT_SPEED
+            self.velocity = -CURRENT_SPEED
+            self.steering_angle = 0.0
 
-        # 3. MICRO-TURNS (TL / TR)
-        elif cmd.startswith("TL"):
-            try: val = int(cmd[2:])
-            except: val = 0
-            self.target_val = val; self.state = "TURNING"
-            self.vl = -CURRENT_SPEED * 0.5; self.vr = CURRENT_SPEED * 0.5
+        # ==========================
+        # 3. UNSUPPORTED MOVES
+        # ==========================
+        elif cmd.startswith("TL") or cmd.startswith("TR"):
+            print(f"WARNING: Ackermann steering cannot Spot Turn ({cmd}). Skipping.")
+            self.state = "IDLE"; self.current_cmd_idx += 1
 
-        elif cmd.startswith("TR"):
-            try: val = int(cmd[2:])
-            except: val = 0
-            self.target_val = val; self.state = "TURNING"
-            self.vl = CURRENT_SPEED * 0.5; self.vr = -CURRENT_SPEED * 0.5
-
-        # 4. OTHER
+        # ==========================
+        # 4. AUX COMMANDS
+        # ==========================
         elif cmd.startswith("SNAP"):
             self.state = "SCANNING"
             self.pause_end_time = time.time() + SCAN_DURATION
@@ -372,6 +366,7 @@ class Robot:
         else:
             self.state = "IDLE"; self.current_cmd_idx += 1
 
+    # (Keep draw, draw_fov_cone, draw_path exactly as they were)
     def draw(self, surface):
         px, py = grid_to_pixel(self.x, self.y)
         rotated_surf = pygame.transform.rotate(self.original_surf, self.theta)
@@ -382,13 +377,10 @@ class Robot:
         px, py = grid_to_pixel(self.x, self.y)
         scale = ARENA_WIDTH / GRID_SIZE
         range_px = int(30 * scale)
-
         theta_rad = math.radians(self.theta)
         half_fov = math.radians(31.1)
-
         left_angle = theta_rad + half_fov
         right_angle = theta_rad - half_fov
-
         cone_surface = pygame.Surface((ARENA_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         points = [(px, py)]
         for i in range(21):
@@ -396,7 +388,6 @@ class Robot:
             x = px + range_px * math.cos(angle)
             y = py - range_px * math.sin(angle)
             points.append((int(x), int(y)))
-
         if len(points) >= 3:
             pygame.draw.polygon(cone_surface, FOV_COLOR, points)
         surface.blit(cone_surface, (0, 0))
