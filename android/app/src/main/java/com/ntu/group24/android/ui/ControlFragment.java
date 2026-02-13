@@ -79,10 +79,6 @@ public class ControlFragment extends Fragment {
 
     private void sendCommand(String cmd) {
         // Always log it to COMMS (even if BT not connected)
-        Intent i = new Intent(Constants.INTENT_MESSAGE_SENT);
-        i.putExtra("message", cmd);
-        LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
-
         MainActivity activity = (MainActivity) getActivity();
         if (activity == null || activity.getBluetoothService() == null) {
             Toast.makeText(requireContext(), "Bluetooth not ready", Toast.LENGTH_SHORT).show();

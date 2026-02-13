@@ -97,8 +97,7 @@ public class GridMap extends View {
 
     private void broadcastObstacleMapDirty() {
         try {
-            Intent i = new Intent(Constants.INTENT_MESSAGE_SENT);
-            i.putExtra("message", "Deleted obstacle " + draggingId + " (renumbering + full sync)");
+            Intent i = new Intent(Constants.INTENT_OBSTACLE_MAP_DIRTY);
             LocalBroadcastManager.getInstance(getContext()).sendBroadcast(i);
         } catch (Exception e) {
             Log.d(TAG, "broadcastObstacleMapDirty failed");
@@ -169,13 +168,6 @@ public class GridMap extends View {
                         o.setFace(newFace);
                         invalidate();
 
-                        String msg = String.format(Locale.US, "FACE,%d,%s", hitId, newFace.name());
-                        MainActivity activity = (MainActivity) getContext();
-                        if (activity != null && activity.getBluetoothService() != null) {
-                            activity.getBluetoothService().write(msg);
-                        }
-
-                        // NEW: trigger full sync (important if ids were renumbered earlier)
                         broadcastObstacleMapDirty();
 
                         Log.d(TAG, "Obstacle " + hitId + " face set to " + newFace.name());
@@ -342,21 +334,24 @@ public class GridMap extends View {
                     MainActivity activity = (MainActivity) getContext();
 
                     if (finalCell == null) {
-                        // NEW: delete + renumber instead of simple remove
+                        if (activity != null && activity.getBluetoothService() != null) {
+                            activity.getBluetoothService().write("SUB," + draggingId);
+                        }
+
+                        // 2. Now renumber locally
                         removeObstacleAndRenumber(draggingId);
 
-                        // Trigger full sync so RPi gets latest ids
+                        // 3. Trigger full sync to ensure RPi is aligned
                         broadcastObstacleMapDirty();
-                    } else {
+                    }
+                    else {
                         Obstacle o = obstacles.get(draggingId);
                         if (o != null && activity != null && activity.getBluetoothService() != null) {
+                            // Send the updated coordinates for the existing ID
                             String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
                                     o.getId(), o.getX(), o.getY(), o.getFace().name());
                             activity.getBluetoothService().write(msg);
                         }
-
-                        // Optional: full sync as well (safe)
-                        broadcastObstacleMapDirty();
                     }
 
                     isDragging = false;

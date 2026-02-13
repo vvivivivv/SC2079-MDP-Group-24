@@ -203,10 +203,6 @@ public class MapFragment extends Fragment {
                     // Update UI
                     gridMap.upsertObstacle(id, x0, y0, face);
 
-                    // FULL SYNC (so RPi has the latest numbering always)
-                    syncAllObstaclesToRpi();
-
-                    // Send coordinates to RPi via Bluetooth (C.6, C.7)
                     MainActivity activity = (MainActivity) getActivity();
                     if (activity != null && activity.getBluetoothService() != null) {
                         String msg = String.format(Locale.US, Constants.OBSTACLE_ADD, id, x0, y0, faceStr);
@@ -253,7 +249,6 @@ public class MapFragment extends Fragment {
 
         // Optional: if your RPi supports CLEAR
         activity.getBluetoothService().write("CLEAR");
-        logComms("TX: CLEAR (full obstacle sync)");
 
         for (Obstacle o : gridMap.getObstacles().values()) {
             if (o == null) continue;
@@ -262,10 +257,7 @@ public class MapFragment extends Fragment {
                     o.getId(), o.getX(), o.getY(), o.getFace().name());
 
             activity.getBluetoothService().write(msg);
-//            logComms("TX: " + msg);
         }
-
-        logComms("TX: Full obstacle sync done (" + gridMap.getObstacles().size() + " obstacles)");
     }
 
     private void logComms(String message) {

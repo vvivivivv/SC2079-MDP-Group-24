@@ -56,7 +56,6 @@ public class CommunicationsFragment extends Fragment {
                     if (activityStatus != null && tvStatus != null) {
                         tvStatus.setText(activityStatus);
                         tvStatus.setBackgroundColor(Color.parseColor("#BBDEFB"));
-                        appendLine("[RX] " + activityStatus);
                     }
                     break;
             }
