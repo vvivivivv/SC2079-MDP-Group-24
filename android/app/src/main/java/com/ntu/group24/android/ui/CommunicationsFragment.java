@@ -25,6 +25,7 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.utils.Constants;
+import com.ntu.group24.android.utils.CommsLog;
 
 public class CommunicationsFragment extends Fragment {
 
@@ -55,7 +56,6 @@ public class CommunicationsFragment extends Fragment {
                     if (activityStatus != null && tvStatus != null) {
                         tvStatus.setText(activityStatus);
                         tvStatus.setBackgroundColor(Color.parseColor("#BBDEFB"));
-                        appendLine("[RX] " + activityStatus);
                     }
                     break;
             }
@@ -109,7 +109,9 @@ public class CommunicationsFragment extends Fragment {
         tvStatus = root.findViewById(R.id.tvCommsStatus);
 
         tvLog.setMovementMethod(new ScrollingMovementMethod());
-
+        for (String line : CommsLog.snapshot()) {
+            appendLine(line);
+        }
         // Send message to AMD tool (C.1)
         etInput = root.findViewById(R.id.etInput);
         Button btnSend = root.findViewById(R.id.btnSend);

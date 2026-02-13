@@ -2,6 +2,7 @@ package com.ntu.group24.android.map;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.*;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -11,6 +12,7 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.ntu.group24.android.models.Obstacle;
 import com.ntu.group24.android.models.Robot;
@@ -31,7 +33,6 @@ public class GridMap extends View {
     private final Robot robot = new Robot(1, 1, "N");
     private OnRobotMovedListener robotMovedListener;
 
-    // Pre-allocated objects for high-performance drawing (C.8)
     private final RectF tempRect = new RectF();
     private final RectF robotRect = new RectF();
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -49,7 +50,6 @@ public class GridMap extends View {
     private float cellSizePx;
     private float originX;
     private float originY;
-    // Robot dragging
     private boolean isDraggingRobot = false;
     private int robotDragOffsetX = 0;
     private int robotDragOffsetY = 0;
@@ -59,7 +59,6 @@ public class GridMap extends View {
     private boolean isDragging = false;
 
     private GestureDetector gestureDetector;
-
 
     public GridMap(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
@@ -83,7 +82,6 @@ public class GridMap extends View {
         this.robotMovedListener = listener;
     }
 
-
     public void removeObstacle(int id) {
         obstacles.remove(id);
         invalidate();
@@ -94,6 +92,15 @@ public class GridMap extends View {
         if (o != null) {
             o.setFace(face);
             invalidate();
+        }
+    }
+
+    private void broadcastObstacleMapDirty() {
+        try {
+            Intent i = new Intent(Constants.INTENT_OBSTACLE_MAP_DIRTY);
+            LocalBroadcastManager.getInstance(getContext()).sendBroadcast(i);
+        } catch (Exception e) {
+            Log.d(TAG, "broadcastObstacleMapDirty failed");
         }
     }
 
@@ -155,24 +162,18 @@ public class GridMap extends View {
                 Integer hitId = findObstacleAt(e.getX(), e.getY());
 
                 if (hitId != null) {
-                    // Touch-based interaction for side selection (C.7)
                     Obstacle o = obstacles.get(hitId);
                     if (o != null) {
-                        // Calculate where inside the 1x1 cell the user touched
-                        // relativeX and relativeY will be between 0.0 and 1.0
                         Obstacle.Dir newFace = getTappedFace(e.getX(), e.getY());
                         o.setFace(newFace);
                         invalidate();
 
-                        // Communicate to Bluetooth immediately (C.7)
-                        String msg = String.format(Locale.US, "FACE,%d,%s", hitId, newFace.name());
-                        MainActivity activity = (MainActivity) getContext();
-                        if (activity.getBluetoothService() != null) {
-                            activity.getBluetoothService().write(msg);
-                        }
+                        broadcastObstacleMapDirty();
 
                         Log.d(TAG, "Obstacle " + hitId + " face set to " + newFace.name());
                     }
+                    isDragging = false;
+                    draggingId = null;
                     return true;
                 }
 
@@ -264,7 +265,6 @@ public class GridMap extends View {
         // 1) If robot is being dragged, handle it and skip obstacle gestures
         if (isDraggingRobot) {
             switch (event.getActionMasked()) {
-
                 case MotionEvent.ACTION_MOVE: {
                     Cell c = pointToCellModel(event.getX(), event.getY());
                     if (c != null) {
@@ -283,7 +283,6 @@ public class GridMap extends View {
                     }
                     return true;
                 }
-
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL: {
                     isDraggingRobot = false;
@@ -295,14 +294,12 @@ public class GridMap extends View {
             return true;
         }
 
-        // 2) Normal flow: let gestureDetector handle taps/long-press for obstacles
         gestureDetector.onTouchEvent(event);
         if (event.getAction() == MotionEvent.ACTION_DOWN) performClick();
 
         switch (event.getActionMasked()) {
 
             case MotionEvent.ACTION_DOWN: {
-                // Start dragging robot if finger touches robot
                 if (isTouchOnRobot(event.getX(), event.getY())) {
                     Cell c = pointToCellModel(event.getX(), event.getY());
                     if (c != null) {
@@ -337,15 +334,20 @@ public class GridMap extends View {
                     MainActivity activity = (MainActivity) getContext();
 
                     if (finalCell == null) {
-                        removeObstacle(draggingId);
-
-                        if (activity.getBluetoothService() != null) {
-                            String msg = String.format(Locale.US, Constants.OBSTACLE_REMOVE, draggingId);
-                            activity.getBluetoothService().write(msg);
+                        if (activity != null && activity.getBluetoothService() != null) {
+                            activity.getBluetoothService().write("SUB," + draggingId);
                         }
-                    } else {
+
+                        // 2. Now renumber locally
+                        removeObstacleAndRenumber(draggingId);
+
+                        // 3. Trigger full sync to ensure RPi is aligned
+                        broadcastObstacleMapDirty();
+                    }
+                    else {
                         Obstacle o = obstacles.get(draggingId);
-                        if (o != null && activity.getBluetoothService() != null) {
+                        if (o != null && activity != null && activity.getBluetoothService() != null) {
+                            // Send the updated coordinates for the existing ID
                             String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
                                     o.getId(), o.getX(), o.getY(), o.getFace().name());
                             activity.getBluetoothService().write(msg);
@@ -368,7 +370,6 @@ public class GridMap extends View {
         return true;
     }
 
-
     private void computeGeometry() {
         cellSizePx = Math.min(getWidth() - 2*INSET_PX - AXIS_MARGIN_PX, getHeight() - 2*INSET_PX - AXIS_MARGIN_PX) / GRID_SIZE;
         originX = INSET_PX + AXIS_MARGIN_PX;
@@ -387,7 +388,6 @@ public class GridMap extends View {
         int y = robot.getY();
         String dir = robot.getDirection();
 
-        // 1. Calculate potential new position
         int nextX = x;
         int nextY = y;
         String nextDir = dir;
@@ -536,7 +536,6 @@ public class GridMap extends View {
                             Obstacle.Dir d = toDir(p[3]);
                             if (d != null) o.setFace(d);
                         }
-
                         invalidate();
                     }
                 } catch (Exception e) {
@@ -581,7 +580,6 @@ public class GridMap extends View {
         Path triangle = new Path();
         float cx = rect.centerX();
         float cy = rect.centerY();
-
         float pad = cellSizePx * 0.3f;
 
         switch (dir) {
@@ -657,4 +655,38 @@ public class GridMap extends View {
         return false;
     }
 
+    public int getNextObstacleId() {
+        int max = 0;
+        for (Integer id : obstacles.keySet()) {
+            if (id != null && id > max) max = id;
+        }
+        return max + 1;
+    }
+
+    public void removeObstacleAndRenumber(int removedId) {
+        if (!obstacles.containsKey(removedId)) return;
+
+        obstacles.remove(removedId);
+
+        java.util.List<Integer> ids = new java.util.ArrayList<>(obstacles.keySet());
+        java.util.Collections.sort(ids);
+
+        java.util.Map<Integer, Obstacle> newMap = new java.util.LinkedHashMap<>();
+        int newId = 1;
+
+        for (Integer oldId : ids) {
+            Obstacle old = obstacles.get(oldId);
+            if (old == null) continue;
+
+            Obstacle o = new Obstacle(newId, old.getX(), old.getY(), old.getFace());
+            o.setTargetId(old.getTargetId()); // preserve image id
+            newMap.put(newId, o);
+            newId++;
+        }
+
+        obstacles.clear();
+        obstacles.putAll(newMap);
+
+        invalidate();
+    }
 }

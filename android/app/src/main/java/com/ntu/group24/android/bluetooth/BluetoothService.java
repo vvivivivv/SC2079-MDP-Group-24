@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import com.ntu.group24.android.utils.CommsLog;
 
 public class BluetoothService {
     private static final String TAG = "BluetoothService";
@@ -38,12 +39,16 @@ public class BluetoothService {
     }
 
     private void sendStatusBroadcast(String status) {
+        CommsLog.add("[STATUS] " + status);
+
         Intent intent = new Intent(Constants.INTENT_CONNECTION_STATUS);
         intent.putExtra("status", status);
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
     }
 
     private void sendMessageBroadcast(String message) {
+        CommsLog.add("[RX] " + message);
+
         Intent intent = new Intent(Constants.INTENT_MESSAGE_RECEIVED);
         intent.putExtra("message", message);
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(intent);
@@ -346,7 +351,7 @@ public class BluetoothService {
         if (message == null) return;
 
         message = message.trim();
-
+        CommsLog.add("[TX] " + message);
         // Always show in COMMS as TX
         Intent tx = new Intent(Constants.INTENT_MESSAGE_SENT);
         tx.putExtra("message", message);
