@@ -22,4 +22,5 @@ public class RobotViewModel extends ViewModel {
     public LiveData<String> getIncomingCommand() {
         return incomingCommand;
     }
+
 }
