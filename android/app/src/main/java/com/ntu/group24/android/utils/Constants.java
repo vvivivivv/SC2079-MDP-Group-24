@@ -43,5 +43,8 @@ public class Constants {
     public static final String INTENT_TARGET_DETECTED = "INTENT_TARGET_DETECTED";
     public static final String EXTRA_OBSTACLE_NO = "obstacle_no";
     public static final String EXTRA_IMAGE_ID = "image_id";
+    public static final String OBSTACLE_CLEAR_ALL = "CLEAR";
+    public static final String INTENT_OBSTACLE_MAP_DIRTY = "INTENT_OBSTACLE_MAP_DIRTY";
+
 
 }

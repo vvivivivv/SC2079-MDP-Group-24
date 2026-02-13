@@ -12,10 +12,59 @@
         android:hint="Obstacle ID (e.g. 1)"
         android:inputType="number" />
 
-    <Spinner
-        android:id="@+id/spinnerFace"
+    <!-- Face selector (replace the Spinner section with this) -->
+    <RadioGroup
+        android:id="@+id/rgFace"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp" />
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginTop="12dp">
+
+        <RadioButton
+            android:id="@+id/rbN"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:text="N"
+            android:gravity="center"
+            android:button="@null"
+            android:background="@drawable/bg_circle_option"
+            android:textStyle="bold"
+            android:checked="true"
+            android:layout_margin="8dp"/>
+
+        <RadioButton
+            android:id="@+id/rbE"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:text="E"
+            android:gravity="center"
+            android:button="@null"
+            android:background="@drawable/bg_circle_option"
+            android:textStyle="bold"
+            android:layout_margin="8dp"/>
+
+        <RadioButton
+            android:id="@+id/rbS"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:text="S"
+            android:gravity="center"
+            android:button="@null"
+            android:background="@drawable/bg_circle_option"
+            android:textStyle="bold"
+            android:layout_margin="8dp"/>
+
+        <RadioButton
+            android:id="@+id/rbW"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:text="W"
+            android:gravity="center"
+            android:button="@null"
+            android:background="@drawable/bg_circle_option"
+            android:textStyle="bold"
+            android:layout_margin="8dp"/>
+    </RadioGroup>
 
 </LinearLayout>

@@ -30,6 +30,7 @@ import com.ntu.group24.android.utils.Constants;
 import com.ntu.group24.android.models.RobotViewModel;
 
 import java.util.Locale;
+import java.util.Map;
 
 public class MapFragment extends Fragment {
 
@@ -70,12 +71,17 @@ public class MapFragment extends Fragment {
 
             Log.d("MapFragment", "TARGET detected: obstacleNo=" + obstacleNo + ", imageId=" + imageId);
 
-            // Update the obstacle on the grid to show the imageId
             boolean updated = updateObstacleImageId(obstacleNo, imageId);
+            if (!updated) Log.d("MapFragment", "No matching obstacle found for obstacleNo=" + obstacleNo);
+        }
+    };
 
-            if (!updated) {
-                Log.d("MapFragment", "No matching obstacle found for obstacleNo=" + obstacleNo);
-            }
+    // NEW: when GridMap renumbers/deletes/face-changes, do a full sync
+    private final BroadcastReceiver fullSyncReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!isAdded() || gridMap == null) return;
+            syncAllObstaclesToRpi();
         }
     };
 
@@ -168,26 +174,37 @@ public class MapFragment extends Fragment {
 
     private void showAddObstacleDialog(int x0, int y0) {
         View dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_add_obstacle, null);
-        EditText idInput = dialogView.findViewById(R.id.inputObstacleId);
-        Spinner faceSpinner = dialogView.findViewById(R.id.spinnerFace);
 
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
-                android.R.layout.simple_spinner_dropdown_item, new String[]{"N","E","S","W"});
-        faceSpinner.setAdapter(adapter);
+        // keep hiding the id input (auto numbering)
+        EditText idInput = dialogView.findViewById(R.id.inputObstacleId);
+        if (idInput != null) idInput.setVisibility(View.GONE);
+
+        // NEW: radio group instead of spinner
+        android.widget.RadioGroup rgFace = dialogView.findViewById(R.id.rgFace);
 
         new AlertDialog.Builder(requireContext())
                 .setTitle("Add Obstacle")
                 .setView(dialogView)
                 .setPositiveButton("Add", (d, which) -> {
-                    String idStr = idInput.getText().toString().trim();
-                    if (idStr.isEmpty()) return;
 
-                    int id = Integer.parseInt(idStr);
-                    String faceStr = (String) faceSpinner.getSelectedItem();
+                    int id = gridMap.getNextObstacleId();
+
+                    // Default face
+                    String faceStr = "N";
+                    if (rgFace != null) {
+                        int checkedId = rgFace.getCheckedRadioButtonId();
+                        if (checkedId == R.id.rbE) faceStr = "E";
+                        else if (checkedId == R.id.rbS) faceStr = "S";
+                        else if (checkedId == R.id.rbW) faceStr = "W";
+                    }
+
                     Obstacle.Dir face = parseDir(faceStr);
 
                     // Update UI
                     gridMap.upsertObstacle(id, x0, y0, face);
+
+                    // FULL SYNC (so RPi has the latest numbering always)
+                    syncAllObstaclesToRpi();
 
                     // Send coordinates to RPi via Bluetooth (C.6, C.7)
                     MainActivity activity = (MainActivity) getActivity();
@@ -196,7 +213,8 @@ public class MapFragment extends Fragment {
                         activity.getBluetoothService().write(msg);
                     }
                 })
-                .setNegativeButton("Cancel", null).show();
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private Obstacle.Dir parseDir(String s) {
@@ -224,6 +242,36 @@ public class MapFragment extends Fragment {
             Log.e("MapFragment", "updateObstacleImageId failed", e);
         }
         return false;
+    }
+
+    // NEW: full sync map to RPi after any add/remove/renumber/face change
+    private void syncAllObstaclesToRpi() {
+        if (!isAdded() || gridMap == null) return;
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity == null || activity.getBluetoothService() == null) return;
+
+        // Optional: if your RPi supports CLEAR
+        activity.getBluetoothService().write("CLEAR");
+        logComms("TX: CLEAR (full obstacle sync)");
+
+        for (Obstacle o : gridMap.getObstacles().values()) {
+            if (o == null) continue;
+
+            String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
+                    o.getId(), o.getX(), o.getY(), o.getFace().name());
+
+            activity.getBluetoothService().write(msg);
+//            logComms("TX: " + msg);
+        }
+
+        logComms("TX: Full obstacle sync done (" + gridMap.getObstacles().size() + " obstacles)");
+    }
+
+    private void logComms(String message) {
+        Intent i = new Intent(Constants.INTENT_MESSAGE_SENT);
+        i.putExtra("message", message);
+        LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
     }
 
 
@@ -267,6 +315,9 @@ public class MapFragment extends Fragment {
 
         // Target detected from BluetoothService (C.9)
         lbm.registerReceiver(targetDetectedReceiver, new IntentFilter(Constants.INTENT_TARGET_DETECTED));
+
+        // NEW: full sync signal from GridMap after delete/renumber/face change
+        lbm.registerReceiver(fullSyncReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_MAP_DIRTY));
     }
 
     @Override
@@ -276,6 +327,7 @@ public class MapFragment extends Fragment {
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(requireContext());
         lbm.unregisterReceiver(taskResetReceiver);
         lbm.unregisterReceiver(targetDetectedReceiver);
+        lbm.unregisterReceiver(fullSyncReceiver);
     }
 
     private void broadcastRobotStatus(String status) {
