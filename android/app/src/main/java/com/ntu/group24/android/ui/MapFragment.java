@@ -50,7 +50,6 @@ public class MapFragment extends Fragment {
             if (msg.equals(Constants.START_EXPLORATION) || msg.equals(Constants.START_FASTEST_PATH)) {
                 currentTargetIndex = 0;
                 Log.d("MapFragment", "Task started: Target index reset to 0");
-                broadcastRobotStatus("Ready to Start");
             }
         }
     };

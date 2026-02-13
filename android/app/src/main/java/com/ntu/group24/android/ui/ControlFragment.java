@@ -44,6 +44,7 @@ public class ControlFragment extends Fragment {
         Button btnRight = view.findViewById(R.id.btnRight);
         Button btnTask1 = view.findViewById(R.id.btnTask1);
         Button btnTask2 = view.findViewById(R.id.btnTask2);
+        Button btnCompute = view.findViewById(R.id.btnCompute);
 
         // Movement controls (C.3)
         btnForward.setOnClickListener(v -> moveRobot("FORWARD"));
@@ -54,6 +55,20 @@ public class ControlFragment extends Fragment {
         // Task controls
         btnTask1.setOnClickListener(v -> sendCommand(Constants.START_EXPLORATION));
         btnTask2.setOnClickListener(v -> sendCommand(Constants.START_FASTEST_PATH));
+
+        btnCompute.setOnClickListener(v -> {
+            Intent syncIntent = new Intent(Constants.INTENT_OBSTACLE_MAP_DIRTY);
+            LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(syncIntent);
+
+            sendCommand(Constants.START_COMPUTATION);
+            broadcastStatus("Computing Path...");
+        });
+    }
+
+    private void broadcastStatus(String status) {
+        Intent statusIntent = new Intent(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
+        statusIntent.putExtra("message", status);
+        LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(statusIntent);
     }
 
     private void moveRobot(String direction) {
@@ -89,10 +104,16 @@ public class ControlFragment extends Fragment {
         activity.getBluetoothService().write(cmd);
 
         // Broadcast status for task buttons (C.4)
-        if (cmd.equals(Constants.START_EXPLORATION) || cmd.equals(Constants.START_FASTEST_PATH)) {
-            Intent statusIntent = new Intent(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
-            statusIntent.putExtra("message", "Ready to Start: Looking for Target 1");
-            LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(statusIntent);
+        if (cmd.equals(Constants.START_EXPLORATION)) {
+            broadcastStatus("Ready to Start: Looking for Target 1");
+        }
+
+        else if (cmd.equals(Constants.START_FASTEST_PATH)) {
+            broadcastStatus("Task 2: Running Fastest Path");
+        }
+
+        else if (cmd.equals(Constants.START_COMPUTATION)) {
+            broadcastStatus("Computing Path...");
         }
 
         Toast.makeText(requireContext(), "Sent: " + cmd, Toast.LENGTH_SHORT).show();

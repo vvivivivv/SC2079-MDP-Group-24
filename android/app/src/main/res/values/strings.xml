@@ -42,4 +42,14 @@
     <string name="hint_zero">0</string>
     <string name="btn_set">SET</string>
 
+    <!-- Control -->
+    <string name="move_left">Left</string>
+    <string name="move_right">Right</string>
+    <string name="move_forward">Forward</string>
+    <string name="move_backward">Backward</string>
+    <string name="task1">Task 1</string>
+    <string name="task2">Task 2</string>
+    <string name="start_computation">Start Computation</string>
+
+
 </resources>
