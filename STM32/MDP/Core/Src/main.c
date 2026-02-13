@@ -148,10 +148,24 @@ volatile int ready_parse = 0;
 volatile int move_flag = 0;
 volatile int delay_flag = 1000;
 volatile int turn_flag = -1;
+volatile int turned_angle = 0; //track how many degrees the car has turned
+volatile int target_angle = 0;
+
+const int SPEED_MAX = 7190;
+const int SPEED_NORM = 3000;
+const int SPEED_SLOW = 1500;
+
+volatile int speedA = SPEED_NORM; // the pwm wave, 7199 is max i think
+volatile int speedB = SPEED_NORM;
 
 // used for encoders
-const float ENCODER_COUNTS_PER_REVOLUTION = 1540.0f;
+//const float ENCODER_COUNTS_PER_REVOLUTION = 1540.0f;
+const float ENCODER_COUNTS_PER_REVOLUTION = 770.0f;
 const float WHEEL_CIRCUMFERENCE_CM = 6.5f*3.14f;
+volatile int rotations = 0;
+
+volatile float Adist = 0; //temp vars
+volatile float Bdist = 0;
 
 /* USER CODE END PV */
 
@@ -238,21 +252,22 @@ void stop(){
 
 
 void move(int direction){
-	//int pwmVal = 7199;
-	int pwmVal = 3000;
+	int pwmVal = 7199;
+	//int pwmVal = motor_speed;
+
 	if (direction == 1){
 		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, pwmVal); // PWM to Motor A (IN2)
+		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
 
 		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
-		__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, pwmVal); // PWM to Motor B (IN2)
+		__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, speedB); // PWM to Motor B (IN2)
 	}
 	else if (direction == 2){
 		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0);
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, pwmVal); // PWM to Motor A (IN1)
+		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, speedA); // PWM to Motor A (IN1)
 
 
-		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, pwmVal);
+		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
 		__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
 	}
 	/*
@@ -284,13 +299,13 @@ void testMoveThread(void* arg){
 		//osDelay(1000);
 		if (move_flag == 1){
 			move(1);
-			osDelay(delay_flag); //TODO change to distance instead of time
-			move_flag = 0;
+			//osDelay(delay_flag); //TODO change to distance instead of time
+			//move_flag = 0;
 		}
 		if (move_flag == 2){
 			move(2);
-			osDelay(delay_flag);
-			move_flag = 0;
+			//osDelay(delay_flag);
+			//move_flag = 0;
 		}
 		if (move_flag == 0){
 			stop();
@@ -314,6 +329,7 @@ void testTurnThread(void* arg){
 }
 
 void turn(int value){
+	// turns the front wheels
 	if (value < SERVO_LEFT_MAX || value > SERVO_RIGHT_MAX){
 		display("value too extreme", 1);
 		return;
@@ -321,6 +337,7 @@ void turn(int value){
 
 	htim12.Instance->CCR1 = value; // straight
 }
+
 
 void icm20948_init(void){
     uint8_t data;
@@ -427,9 +444,12 @@ void execute_command_thread(void* args){
 
 	char tmp[20];
 	char command[4]; // hard force command to only be 3 characters long
+	char buf[20];
 	int value;
-	const char *commands[] = {"FWD\0", "BCK\0", "LFT\0", "RGT\0"
-			, "FWL\0", "FWR\0", "BKL\0", "BKR\0"};
+	//const char *commands[] = {"FWD\0", "BCK\0", "LFT\0", "RGT\0"
+	//		, "FWL\0", "FWR\0", "BKL\0", "BKR\0"};
+
+	const char *commands[] = {"FW\0", "BW\0", "LFT\0", "RGT\0", "FL\0", "FR\0", "BL\0", "BR\0"};
 
 	Command cmd;
 
@@ -446,19 +466,19 @@ void execute_command_thread(void* args){
 				tmp[cmd.command_len] = '\0';
 				sscanf(tmp, "%s %d", command, &value);
 
-
+				display(tmp, 3);
 				if (strcmp(command, commands[0]) == 0 ){ //FWD
 					//sprintf(command, "MOVE FWD %d ms, %d", value, move_flag); //TESTING
 					//display(command,1);
 					move_flag = 1;
-					delay_flag = value;
 					osDelay(value);
+					move_flag = 0;
 					send("OK!");
 				}
 				if (strcmp(command, commands[1]) == 0){ //BCK
 					move_flag = 2;
-					delay_flag = value;
 					osDelay(value);
+					move_flag = 0;
 					send("OK!");
 				}
 				if (strcmp(command, commands[2]) == 0){ //LFT
@@ -472,22 +492,63 @@ void execute_command_thread(void* args){
 					send("OK!");
 				}
 				if (strcmp(command, commands[4]) == 0){ //FL
-					// hard coded for now, since i cant figure out the encoder pid shyttt
+
 					turn_flag = SERVO_LEFT;
 					osDelay(500); // wait for the wheel to turn
 					move_flag = 1;
-					delay_flag = 1300;
-					osDelay(1300);
+					osDelay(value);
+					move_flag = 0;
 					turn_flag = SERVO_STRAIGHT;
+					/*
+					target_angle = turned_angle + 90;
+					move_flag = 1;
+
+					while (turned_angle < target_angle) {
+						// Slow down when approaching target
+						if (turned_angle > target_angle - 20 ){
+							motor_speed = SPEED_SLOW;
+						}
+						else {
+							osDelay(10);
+						}
+					}
+					move_flag = 0; //stop
+					motor_speed = SPEED_NORM;
+					*/
+
+					turn_flag = SERVO_STRAIGHT;
+
 					send("OK!");
 				}
 				if (strcmp(command, commands[5]) == 0){ //FR
 					turn_flag = SERVO_RIGHT;
 					osDelay(500); // wait for the wheel to turn
 					move_flag = 1;
-					delay_flag = 1500;
-					osDelay(1500);
+					osDelay(value);
+					move_flag = 0;
 					turn_flag = SERVO_STRAIGHT;
+					/*
+					target_angle = turned_angle - 90;
+					move_flag = 1;
+
+					while (turned_angle > target_angle) {
+						// Slow down when approaching target
+						sprintf(buf, "%d", turned_angle);
+						display(buf, 3);
+						if (turned_angle < target_angle + 20 ){
+							motor_speed = SPEED_SLOW;
+						}
+						else {
+							osDelay(10);
+						}
+					}
+
+					move_flag = 0; //stop
+					motor_speed = SPEED_NORM; //TODO: use a constant here prob
+
+					turn_flag = SERVO_STRAIGHT;
+					*/
+
 					send("OK!");
 				}
 				if (strcmp(command, commands[6]) == 0){ //BL
@@ -495,18 +556,54 @@ void execute_command_thread(void* args){
 					turn_flag = SERVO_LEFT;
 					osDelay(500); // wait for the wheel to turn
 					move_flag = 2;
-					delay_flag = 1200;
-					osDelay(1200);
+					osDelay(value);
+					move_flag = 0;
 					turn_flag = SERVO_STRAIGHT;
+					/*
+					target_angle = turned_angle - 90;
+					move_flag = 2;
+
+					while (turned_angle > target_angle) {
+						// Slow down when approaching target
+						if (turned_angle < target_angle + 20 ){
+							motor_speed = SPEED_SLOW;
+						}
+						else {
+							osDelay(10);
+						}
+					}
+					move_flag = 0;
+					motor_speed = SPEED_NORM;
+
+					turn_flag = SERVO_STRAIGHT;
+					*/
 					send("OK!");
 				}
 				if (strcmp(command, commands[7]) == 0){ //BR
 					turn_flag = SERVO_RIGHT;
 					osDelay(500); // wait for the wheel to turn
 					move_flag = 2;
-					delay_flag = 1500;
-					osDelay(1500);
+					osDelay(value);
+					move_flag = 0;
 					turn_flag = SERVO_STRAIGHT;
+					/*
+					target_angle = turned_angle + 90;
+					move_flag = 2;
+
+					while (turned_angle < target_angle) {
+						// Slow down when approaching target
+						if (turned_angle > target_angle - 20 ){
+							motor_speed = SPEED_SLOW;
+						}
+						else {
+							osDelay(10);
+						}
+					}
+					move_flag = 0; //stop
+					motor_speed = SPEED_NORM;
+
+					turn_flag = SERVO_STRAIGHT;
+					*/
 					send("OK!");
 				}
 				// reset the shared vars
@@ -737,10 +834,10 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 65535;
+  htim2.Init.Period = 65536;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
@@ -789,7 +886,7 @@ static void MX_TIM3_Init(void)
   htim3.Init.Period = 65535;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
@@ -797,7 +894,7 @@ static void MX_TIM3_Init(void)
   sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0;
+  sConfig.IC2Filter = 10;
   if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -1033,10 +1130,10 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOE_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED3_GPIO_Port, LED3_Pin, GPIO_PIN_RESET);
@@ -1118,12 +1215,9 @@ void StartDefaultTask(void *argument)
 void encoder(void *argument)
 {
   /* USER CODE BEGIN encoder */
-	uint16_t CA, CB, prevCA, prevCB;
-	int16_t Adiff, Bdiff;
-	int16_t Adiffraw;
-
-	float Adist = 0; //temp vars
-	float Bdist = 0;
+	uint32_t CA, CB, prevCA, prevCB;
+	int32_t Adiff, Bdiff;
+	int32_t Adiffraw, Bdiffraw;
 
 	char buf[20] = "TESTING!";
 
@@ -1137,38 +1231,81 @@ void encoder(void *argument)
 	  CA = __HAL_TIM_GET_COUNTER(&htim2);
 	  Adiffraw = (int16_t) CA - prevCA;
 
+	  /*
 	  // checking under/over flow
-	  if (Adiff > 32767){
+	  if (Adiffraw > 32767){
 		  Adiff = Adiffraw - 65536;
 	  }
-	  if (Adiff < -32767){
+	  if (Adiffraw < -32767){
 		  Adiff = Adiffraw + 65536;
 	  }
+	  */
 	  prevCA = CA;
 
 	  //motor B
 	  CB = __HAL_TIM_GET_COUNTER(&htim3);
-	  Bdiff = CB - prevCB;
+	  Bdiffraw = (int16_t) CB - prevCB;
 
+	  /*
 	  // checking under/over flow
-	  if (Bdiff > 32767){
-		  Bdiff = Bdiff - 65536;
+	  if (Bdiffraw > 32767){
+		  Bdiff = Bdiffraw - 65536;
 	  }
-	  if (Bdiff < -32767){
-		  Bdiff = Bdiff + 65536;
+	  if (Bdiffraw < -32767){
+		  Bdiff = Bdiffraw + 65536;
 	  }
+	  */
 	  prevCB = CB;
 
+	  //Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+	  //Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+	  //Bdist += (float)Bdiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
 
-	  Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-	  Bdist += (float)Bdiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+	  // TODO: THIS PROBABLY OVERFLOWS AFTER A CERTAIN DISTANCE (CA/CB LOOPS BACK TO 0). ACCOUNT FOR THIS
+	  Adist = CA / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+	  if (CB == 0){
+		  CB = 65536;
+	  }
+	  Bdist = (65536 - CB) / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
 
 	  //itoa(Adist * 1000, buf, 10);
-	  sprintf(buf, "%d %d", CA, Adiffraw);
+	  sprintf(buf, "%d %d", (int)Adist, (int)Bdist);
 	  //OLED_ShowString(10,20, buf);
 	  display(buf, 2);
+
+
+	  /*
+		// MotorA & MotorB speed difference fix
+		float headingError = Adist - Bdist;
+		const float Kp_heading = 1.0f;
+		const float Ki_heading = 1.0f;
+		const float Kd_heading = 1.0f;
+
+		static float headingIntegral = 0.0f;
+		static float prevHeadingError = 0.0f;
+
+		headingIntegral += headingError;
+		if(headingIntegral > 100) headingIntegral = 100;
+		if(headingIntegral < -100) headingIntegral = -100;
+
+		float headingDerivative = headingError - prevHeadingError;
+		prevHeadingError = headingError;
+		float headingCorrection = Kp_heading * headingError + Ki_heading * headingIntegral + Kd_heading * headingDerivative;
+
+		sprintf(buf, "%d", (int)headingCorrection);
+			  //OLED_ShowString(10,20, buf);
+		display(buf, 1);
+
+		speedA -= headingCorrection;
+		speedB += headingCorrection;
+
+		if (speedA > 7199) speedA = 7199;
+		if (speedA < 0) speedA = 0;
+		if (speedB > 7199) speedB = 7199;
+		if (speedB < 0) speedB = 0;
+	*/
 	  vTaskDelay(pdMS_TO_TICKS(1));
-	  osDelay(1); // idk why but it breaks if theres no delay.
+	  //osDelay(1); // idk why but it breaks if theres no delay.
   }
   /* USER CODE END encoder */
 }
@@ -1259,16 +1396,14 @@ void readICM(void *argument)
 	theta += gyro_z_dps * ((currentTick - lastTick) / 1000.0f);
 	lastTick = currentTick;
 
-	//sprintf(buf, "%d", theta);
-	//display(buf, 1);
-	if (theta < 35.0f) {
-		display("LESS", 1);
-	}else {
-		display("MORE", 1);
-	}
+	//display(theta, 1);
+	turned_angle = theta;
 
-	sprintf(buf2, "%d", gyro_z_raw);
-	display(buf2, 3);
+	//sprintf(buf, "%d", turned_angle);
+	//display(buf, 1);
+
+	//sprintf(buf2, "%d", gyro_z_raw);
+	//display(buf2, 3);
 
 
 	/*
@@ -1318,8 +1453,7 @@ void readICM(void *argument)
 //	sprintf(buf, "%3d", a);
 //	OLED_ShowString(10, 20, buf);
 	osDelay(10);
-
-  }
+	  }
   /* USER CODE END readICM */
 }
 
