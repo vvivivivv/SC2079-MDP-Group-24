@@ -10,16 +10,13 @@ SPOT-TURN ARCHITECTURE:
   2. Build TSP cost matrix using EUCLIDEAN DISTANCE (heading-free)
   3. Solve TSP for optimal visit order
   4. Plan each leg with Hybrid A* (position-only goal, Euclidean heuristic)
-  5. At each waypoint:
-       a. CW spin toward next waypoint (pre-drive — straightens path)
-       b. Drive with Ackermann primitives
-       c. CW spin to face obstacle image
-       d. SNAP
+  5. At each waypoint: compute spin angle, insert TL/TR, then SNAP
 
   Command set:
-    FW/BW/FL/FR/BL/BR  — Ackermann drive
-    CW{deg}             — Spot turn clockwise by {deg} degrees
-    SNAP{id}            — Capture image
+    FW/BW/FL/FR/BL/BR  — Ackermann drive (unchanged)
+    TL{deg}             — Spot turn left by {deg} degrees (NEW)
+    TR{deg}             — Spot turn right by {deg} degrees (NEW)
+    SNAP{id}            — Capture image (simplified, no L/C/R needed)
     FIN                 — Mission complete
 """
 
@@ -235,21 +232,18 @@ class MazeSolver:
         return best_path, best_distance
 
     # =================================================================
-    # SPIN COMMAND GENERATION — ALWAYS CLOCKWISE (CW)
+    # SPIN COMMAND GENERATION
     # =================================================================
 
     @staticmethod
-    def _compute_spin(current_theta_rad, target_x_cm, target_y_cm, robot_x_cm, robot_y_cm):
-        """Compute the clockwise spot-turn needed to face a target point.
-        
-        All turns are clockwise because the robot turns better that way.
-        A left turn of X deg becomes a clockwise turn of (360-X) deg.
+    def _compute_spin(current_theta_rad, face_x_cm, face_y_cm, robot_x_cm, robot_y_cm):
+        """Compute the spot-turn needed to face the obstacle.
         
         Returns:
-            (command_str, new_theta_rad) e.g. ("CW68", 1.57)
+            (command_str, new_theta_rad) e.g. ("TL045", 1.57)
             or (None, current_theta_rad) if already facing it
         """
-        target_theta = math.atan2(target_y_cm - robot_y_cm, target_x_cm - robot_x_cm)
+        target_theta = math.atan2(face_y_cm - robot_y_cm, face_x_cm - robot_x_cm)
         diff = target_theta - current_theta_rad
         diff = (diff + math.pi) % (2 * math.pi) - math.pi  # normalize to [-pi, pi]
         diff_deg = math.degrees(diff)
@@ -257,12 +251,14 @@ class MazeSolver:
         if abs(diff_deg) < 3.0:
             return None, current_theta_rad  # close enough, no spin needed
 
-        # Always clockwise: left turn of X deg = CW (360-X) deg
+        # Always spin clockwise (TR) — the robot turns better this way.
+        # Left turn of X° = right turn of (360-X)°
         if diff_deg > 0:
+            # Would be a left turn — convert to clockwise
             deg = 360 - abs(round(diff_deg))
         else:
             deg = abs(round(diff_deg))
-
+        
         return f"CW{deg}", target_theta
 
     # =================================================================
@@ -271,8 +267,6 @@ class MazeSolver:
 
     def plan_full_route(self, retrying=False, obstacles_data=None):
         """Full pipeline: TSP + Hybrid A* + spot-turn + SNAP.
-        
-        Each leg follows: pre-spin -> drive -> aim-spin -> snap
         
         Returns:
             (commands, waypoint_path, distance)
@@ -319,8 +313,9 @@ class MazeSolver:
 
             # --- PRE-SPIN: face toward next waypoint before driving ---
             # Without this, the robot starts each leg facing the obstacle
-            # it just snapped and has to wiggle with arcs to change direction.
-            # A quick spot-turn first makes the A* path nearly straight.
+            # it just snapped (e.g. facing SOUTH) and has to wiggle around
+            # to drive NORTHWEST. A quick spot-turn first makes the A*
+            # path nearly straight.
             rx, ry, rtheta = start_pose
             gx, gy = goal_xy
             spin_cmd, new_theta = self._compute_spin(
@@ -354,7 +349,7 @@ class MazeSolver:
                 print(f"  Leg {i}: SKIPPED (no path found, {iters} iters)")
                 continue
 
-            # --- AIM-SPIN: rotate to face the obstacle image ---
+            # --- SPIN: rotate to face the obstacle ---
             if wp_to.screenshot_id != -1 and obstacles_dict:
                 ob = obstacles_dict[wp_to.screenshot_id]
 

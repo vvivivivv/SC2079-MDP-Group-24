@@ -303,7 +303,7 @@ class Robot:
         if abs(self.velocity) > 0:
             self.path_history.append((self.x, self.y))
 
-        # 4. Check Termination (Distance Traveled)
+        # 5. Check Termination (Distance Traveled)
         if self.state == "MOVING":
             self.traveled_val += abs(self.velocity * dt)
             if self.traveled_val >= self.target_val:
@@ -388,9 +388,9 @@ class Robot:
             self.steering_angle = 0.0
 
         # ==========================
-        # 3. SPOT TURNS (TL, TR)
+        # 3. SPOT TURNS (CW)
         # ==========================
-        elif cmd.startswith("TL") or cmd.startswith("TR"):
+        elif cmd.startswith("CW") or cmd.startswith("CCW"):
             try:
                 deg = int(cmd[2:])
                 self.angle_to_turn = deg
@@ -398,12 +398,13 @@ class Robot:
                 self.velocity = 0 # Stop linear movement
                 self.steering_angle = 0
                 
-                if cmd.startswith("TL"):
+                if cmd.startswith("CCW"):
                     self.turn_direction = 1  # CCW positive
                 else:
                     self.turn_direction = -1 # CW negative
                 
                 self.state = "TURNING"
+                print(f"  Spot turn -> {cmd} (Animating)")
             except ValueError:
                 print(f"Error parsing spot turn: {cmd}")
                 self.state = "IDLE"; self.current_cmd_idx += 1
