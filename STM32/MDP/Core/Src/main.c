@@ -27,6 +27,7 @@
 #include <string.h>
 #include "queue.h"
 #include "stdio.h"
+#include "pid.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,6 +54,7 @@ TIM_HandleTypeDef htim9;
 TIM_HandleTypeDef htim12;
 
 UART_HandleTypeDef huart3;
+DMA_HandleTypeDef hdma_usart3_rx;
 
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -75,6 +77,8 @@ const osThreadAttr_t readICMTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+
+
 /* USER CODE BEGIN PV */
 
 // Multitasking threads TODO: untested
@@ -119,7 +123,7 @@ volatile float gyro_z_dps = 0.0f;
 
 // Servo constants
 const int SERVO_STRAIGHT = 172;
-const int SERVO_LEFT_MAX = 95;
+const int SERVO_LEFT_MAX = 95; //100
 const int SERVO_LEFT = 120;
 const int SERVO_RIGHT = 240;
 const int SERVO_RIGHT_MAX = 249; // PROBABLY CAN GO HIGHER, BUT NOT TESTED
@@ -129,6 +133,9 @@ const int SERVO_RIGHT_MAX = 249; // PROBABLY CAN GO HIGHER, BUT NOT TESTED
 volatile uint8_t command_buf[MAX_BUF_SIZE];
 volatile char uart_input;
 volatile int command_len = 0;
+
+//UART Buffer
+uint8_t rxBuffer[120];
 
 typedef struct {
 	uint8_t command[20];
@@ -150,13 +157,18 @@ volatile int delay_flag = 1000;
 volatile int turn_flag = -1;
 volatile int turned_angle = 0; //track how many degrees the car has turned
 volatile int target_angle = 0;
+volatile int straighten_flag = 0; // bad implementation imo, but it tells the move_thread whether to use the gyro to adjust itself to go straight.
 
 const int SPEED_MAX = 7190;
+const int SPEED_HIGH = 6000;
 const int SPEED_NORM = 3000;
 const int SPEED_SLOW = 1500;
+const int SPEED_VERY_SLOW = 700;
 
 volatile int speedA = SPEED_NORM; // the pwm wave, 7199 is max i think
 volatile int speedB = SPEED_NORM;
+volatile float speedA_adjust = 0; // feedforward control cuz its easier than pid
+volatile float speedB_adjust = 0;
 
 // used for encoders
 //const float ENCODER_COUNTS_PER_REVOLUTION = 1540.0f;
@@ -166,6 +178,16 @@ volatile int rotations = 0;
 
 volatile float Adist = 0; //temp vars
 volatile float Bdist = 0;
+volatile float average_dist = 0;
+
+// trying pid controller
+static PidDef pidMatch;
+const static float Kp_match = 5e4;
+const static float Ki_match = 7e2;
+const static float Kd_match = 3e3;
+
+static int16_t pwmValAccel = 0, pwmValTarget = 0,
+	lPwmVal = 0, rPwmVal = 0;
 
 /* USER CODE END PV */
 
@@ -177,8 +199,9 @@ static void MX_USART3_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
-static void MX_TIM9_Init(void);
+static void MX_DMA_Init(void);
 static void MX_I2C2_Init(void);
+static void MX_TIM9_Init(void);
 void StartDefaultTask(void *argument);
 void encoder(void *argument);
 void readICM(void *argument);
@@ -237,7 +260,7 @@ void display_thread(void* args){
 }
 
 void stop(){
-	__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0);
+	__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, 0); // set all too high for brake
 	__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_1, 0);
 	__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
 	__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0);
@@ -252,58 +275,76 @@ void stop(){
 
 
 void move(int direction){
-	int pwmVal = 7199;
 	//int pwmVal = motor_speed;
-
 	if (direction == 1){
 		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
 		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
 
 		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
-		__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, speedB); // PWM to Motor B (IN2)
+		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_1, speedB); // PWM to Motor B (IN2)
 	}
 	else if (direction == 2){
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0);
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, speedA); // PWM to Motor A (IN1)
-
+		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, speedA);
+		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0); // PWM to Motor A (IN1)
 
 		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
 		__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
 	}
-	/*
-	// 1 for forward, 2 for backwards
-	// plug motorA to the left motor (blue)
-	if (direction == 2){
-		HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_RESET); // set direction of rotation for wheel A
-		HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_SET); //opposite of motorb cuz its looking the other direction
-
-		HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin,GPIO_PIN_SET);
-		HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin,GPIO_PIN_RESET);
-
-	}
-	else if (direction == 1){
-		HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_SET); // set direction of rotation for wheel A
-		HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_RESET); //opposite of motorb cuz its looking the other direction
-
-		HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin,GPIO_PIN_RESET);
-		HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin,GPIO_PIN_SET);
-	}
-	*/
 }
 
 void testMoveThread(void* arg){
 	char command[20];
+	int start_angle;
+
+	/*
+	char buf[20];
+	sprintf(buf, "%d < %d", (int)start_angle ,  (int)turned_angle);
+	display(buf, 2);
+	*/
+
 	for (;;){
 		//sprintf(command, "IN MOVE %d ! %d", move_flag, delay_flag); //TESTING
 		//display(command);
 		//osDelay(1000);
 		if (move_flag == 1){
 			move(1);
-			//osDelay(delay_flag); //TODO change to distance instead of time
-			//move_flag = 0;
+			start_angle = turned_angle;
+
+			// TODO: this should go somewhere else in the future, just here to test
+			// read gyroscope and try to keep it going straight
+			while (move_flag == 1 && straighten_flag == 1){
+				move(1); // speedA is volatile, so the move thread (self) has to either keep track of when it changes, or just always call it lol
+				if (start_angle < turned_angle){
+					// drifting left
+					turn(SERVO_STRAIGHT + 10); // temp value
+				} else if (start_angle > turned_angle){
+					//drifting right
+					turn(SERVO_STRAIGHT - 10); //temp value
+				} else {
+					turn(SERVO_STRAIGHT);
+				}
+
+				//sprintf(buf, "%d < %d", (int)start_angle, (int)turned_angle);
+				//display(buf, 2);
+			}
 		}
 		if (move_flag == 2){
 			move(2);
+			start_angle = turned_angle;
+
+			// read gyroscope and try to keep it going straight
+			while (move_flag == 2 && straighten_flag == 1){
+				move(2); // speedB is volatile, so the move thread (self) has to either keep track of when it changes, or just always call it lol
+				if (start_angle < turned_angle){
+					// drifting left
+					turn(SERVO_STRAIGHT - 10); // temp value
+				} else if (start_angle > turned_angle){
+					//drifting right
+					turn(SERVO_STRAIGHT + 10); //temp value
+				} else {
+					turn(SERVO_STRAIGHT);
+				}
+			}
 			//osDelay(delay_flag);
 			//move_flag = 0;
 		}
@@ -338,6 +379,76 @@ void turn(int value){
 	htim12.Instance->CCR1 = value; // straight
 }
 
+void turn_in_place(int angle, int dir){
+
+	char buf[20];
+	//sprintf(buf, "%d > %d",  (int)turned_angle, (int)target_angle);
+	//display(buf, 2);
+
+	// dir = 0 => Clockwise
+	// dir = 1 => CounterClockwise
+	if (dir == 0) {
+		int target_angle = turned_angle - angle;
+		turn(SERVO_LEFT_MAX);
+		osDelay(500); // wait for servo to turn
+		for (;;){
+			if (turned_angle > target_angle){
+				//sprintf(buf, "%d > %d",  (int)turned_angle, (int)target_angle);
+				//display(buf, 2);
+				if (turned_angle - target_angle < 30) {
+					// slow down when approaching the target angle
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, SPEED_SLOW); // PWM to Motor A (IN2)
+
+					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, SPEED_NORM);
+					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
+				} else {
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, SPEED_NORM); // PWM to Motor A (IN2)
+
+					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, SPEED_HIGH);
+					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
+				}
+			}
+			else {
+				stop();
+				turn(SERVO_STRAIGHT);
+				return;
+			}
+		}
+	}
+	else if (dir == 1){
+		int target_angle = turned_angle + angle;
+		turn(SERVO_RIGHT_MAX);
+		osDelay(500); // wait for servo to turn
+		for (;;){
+			if (turned_angle < target_angle){
+				sprintf(buf, "%d > %d",  (int)turned_angle, (int)target_angle);
+				display(buf, 2);
+				if (target_angle - turned_angle < 30) {
+					// slow down when approaching the target angle
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, SPEED_NORM); // set IN1 to maximum PWM (7199) for '1'
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0); // PWM to Motor A (IN2)
+
+					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
+					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, SPEED_SLOW); // PWM to Motor B (IN2)
+				} else {
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, SPEED_NORM); // set IN1 to maximum PWM (7199) for '1'
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0); // PWM to Motor A (IN2)
+
+					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
+					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, SPEED_HIGH); // PWM to Motor B (IN2)
+				}
+			}
+			else {
+				stop();
+				turn(SERVO_STRAIGHT);
+				return;
+			}
+		}
+	}
+}
+
 
 void icm20948_init(void){
     uint8_t data;
@@ -361,6 +472,17 @@ void icm20948_init(void){
 	// Put AK09916 into continuous mode (e.g., 100 Hz)
 	data = 0x08; // CNTL2 (0x31): 100 Hz
 	HAL_I2C_Mem_Write(&hi2c2, 0x0C<<1, 0x31, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
+	HAL_UART_Transmit(&huart3, rxBuffer, 10, 10);
+	if(huart == &huart3){
+		rxBuffer[Size] = "\0";
+		HAL_UART_Transmit(&huart3, rxBuffer, 10, 10);
+		snprintf(command_buf, Size, strtok(rxBuffer, ";"));
+		if(strlen(command_buf) > 0) ready_parse = 1;
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart3, rxBuffer, 100);
+	}
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
@@ -427,6 +549,42 @@ void parse_command(){
 	}
 }
 
+void move_by_dist(int dir, int dist_target){
+	// interacts with motor speed and encoder to slow down
+	// triggers flags for move(), then stop() after dist is travelled.
+
+	int starting_dist;
+	int dist_moved;
+	int tmp;
+	int dist_to_go;
+	char buf[20];
+
+	starting_dist = average_dist;
+	move_flag = dir;
+
+	 //TODO: change from average dist to a PID accounting for both dists
+
+	dist_moved = average_dist - starting_dist;
+	while (abs(dist_moved) < abs(dist_target)) {
+		dist_moved = average_dist - starting_dist;
+		sprintf(buf, "%d - %d = %d", abs(dist_target), abs(dist_moved), abs(dist_target) - abs(dist_moved));
+		display(buf, 2);
+		dist_to_go = (abs(dist_target) - abs(dist_moved));
+		if (dist_to_go <= 10){
+			// slow down if 10 cm away
+			//TODO implement PIDDDDD AHHH
+			tmp = ((SPEED_SLOW - SPEED_VERY_SLOW) / 10 * dist_to_go)  + SPEED_VERY_SLOW;
+			speedA = tmp;
+			speedB = tmp;
+		} else {
+			speedA = SPEED_NORM;
+			speedB = SPEED_NORM;
+		}
+	}
+
+	move_flag = 0;
+}
+
 void execute_command_thread(void* args){
 	/*
 	 * Command structure (TODO probably will be changed. idk i just put something here to have something to test)
@@ -449,7 +607,9 @@ void execute_command_thread(void* args){
 	//const char *commands[] = {"FWD\0", "BCK\0", "LFT\0", "RGT\0"
 	//		, "FWL\0", "FWR\0", "BKL\0", "BKR\0"};
 
-	const char *commands[] = {"FW\0", "BW\0", "LFT\0", "RGT\0", "FL\0", "FR\0", "BL\0", "BR\0"};
+	const char *commands[] = {"FW\0", "BW\0", "LFT\0", "CW\0", "CCW\0"
+			, "FL\0", "FR\0", "BL\0", "BR\0"
+			, "A4\0"};
 
 	Command cmd;
 
@@ -467,18 +627,20 @@ void execute_command_thread(void* args){
 				sscanf(tmp, "%s %d", command, &value);
 
 				display(tmp, 3);
+				send(command);
 				if (strcmp(command, commands[0]) == 0 ){ //FWD
-					//sprintf(command, "MOVE FWD %d ms, %d", value, move_flag); //TESTING
-					//display(command,1);
-					move_flag = 1;
-					osDelay(value);
-					move_flag = 0;
+					// check the encoder dist and stop when the target is reached
+
+					// TODO: remove the flag implementation cuz it sucks
+					straighten_flag = 1;
+					move_by_dist(1, value);
+					straighten_flag = 0;
 					send("OK!");
 				}
 				if (strcmp(command, commands[1]) == 0){ //BCK
-					move_flag = 2;
-					osDelay(value);
-					move_flag = 0;
+					straighten_flag = 1;
+					move_by_dist(2, value);
+					straighten_flag = 0;
 					send("OK!");
 				}
 				if (strcmp(command, commands[2]) == 0){ //LFT
@@ -486,20 +648,22 @@ void execute_command_thread(void* args){
 					osDelay(1000);
 					send("OK!");
 				}
-				if (strcmp(command, commands[3]) == 0){ //RGT
-					turn_flag = value; //TODO: change to right
-					osDelay(1000);
+				if (strcmp(command, commands[3]) == 0){ //CW //testing turn in place
+					turn_in_place(value, 0);
 					send("OK!");
 				}
-				if (strcmp(command, commands[4]) == 0){ //FL
-
+				if (strcmp(command, commands[4]) == 0){ //CCW //testing turn in place
+					turn_in_place(value, 1);
+					send("OK!");
+				}
+				if (strcmp(command, commands[5]) == 0){ //FL
 					turn_flag = SERVO_LEFT;
-					osDelay(500); // wait for the wheel to turn
-					move_flag = 1;
-					osDelay(value);
-					move_flag = 0;
+					osDelay(500); // wait for the servo to turn
+					move_by_dist(1, value);
 					turn_flag = SERVO_STRAIGHT;
+
 					/*
+					// THIS IS 90 DEGREE TURN. VALUE IS IGNORED.
 					target_angle = turned_angle + 90;
 					move_flag = 1;
 
@@ -520,12 +684,10 @@ void execute_command_thread(void* args){
 
 					send("OK!");
 				}
-				if (strcmp(command, commands[5]) == 0){ //FR
+				if (strcmp(command, commands[6]) == 0){ //FR
 					turn_flag = SERVO_RIGHT;
-					osDelay(500); // wait for the wheel to turn
-					move_flag = 1;
-					osDelay(value);
-					move_flag = 0;
+					osDelay(500); // wait for the servo to turn
+					move_by_dist(1, value);
 					turn_flag = SERVO_STRAIGHT;
 					/*
 					target_angle = turned_angle - 90;
@@ -551,13 +713,10 @@ void execute_command_thread(void* args){
 
 					send("OK!");
 				}
-				if (strcmp(command, commands[6]) == 0){ //BL
-					// hard coded for now, since i cant figure out the encoder pid shyttt
-					turn_flag = SERVO_LEFT;
-					osDelay(500); // wait for the wheel to turn
-					move_flag = 2;
-					osDelay(value);
-					move_flag = 0;
+				if (strcmp(command, commands[7]) == 0){ //BL
+					turn_flag = SERVO_RIGHT;
+					osDelay(500); // wait for the servo to turn
+					move_by_dist(2, value);
 					turn_flag = SERVO_STRAIGHT;
 					/*
 					target_angle = turned_angle - 90;
@@ -579,12 +738,10 @@ void execute_command_thread(void* args){
 					*/
 					send("OK!");
 				}
-				if (strcmp(command, commands[7]) == 0){ //BR
-					turn_flag = SERVO_RIGHT;
-					osDelay(500); // wait for the wheel to turn
-					move_flag = 2;
-					osDelay(value);
-					move_flag = 0;
+				if (strcmp(command, commands[8]) == 0){ //BR
+					turn_flag = SERVO_LEFT;
+					osDelay(500); // wait for the servo to turn
+					move_by_dist(2, value);
 					turn_flag = SERVO_STRAIGHT;
 					/*
 					target_angle = turned_angle + 90;
@@ -605,6 +762,28 @@ void execute_command_thread(void* args){
 					turn_flag = SERVO_STRAIGHT;
 					*/
 					send("OK!");
+				}
+				if (strcmp(command, commands[9]) == 0){ //A4
+					// THIS IS FL BUT VALUE IS DEGREE TURN NOT DIST
+					turn(SERVO_LEFT);
+					osDelay(300);
+					target_angle = turned_angle + value;
+					move_flag = 1;
+
+					while (turned_angle < target_angle) {
+						// Slow down when approaching target
+						if (turned_angle > target_angle - 30 ){
+							speedA = SPEED_SLOW;
+							speedB = SPEED_SLOW;
+						}
+						else {
+							osDelay(10);
+						}
+					}
+					move_flag = 0; //stop
+					speedA = SPEED_NORM;
+					speedB = SPEED_NORM;
+					turn(SERVO_STRAIGHT);
 				}
 				// reset the shared vars
 				//memset(command_buf, 0, MAX_BUF_SIZE);
@@ -652,11 +831,14 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
-  MX_TIM9_Init();
+  MX_DMA_Init();
   MX_I2C2_Init();
+  MX_TIM9_Init();
   /* USER CODE BEGIN 2 */
   OLED_Init();
   IR_Sensors_Init();
+
+  pid_init(&pidMatch, Kp_match, Ki_match, Kd_match);
 
   // SERVO
   HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
@@ -676,7 +858,7 @@ int main(void)
   // reads 1 character at a time
   HAL_UART_Receive_IT(&huart3, (uint8_t *) &uart_input, 1);
   //HAL_UART_Transmit_IT(&huart3, (uint8_t *) &command_buf, command_len, 0xFFFF); // send instruction
-
+  //HAL_UARTEx_ReceiveToIdle_DMA(&huart3, rxBuffer, 1);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -1120,6 +1302,22 @@ static void MX_USART3_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -1215,7 +1413,7 @@ void StartDefaultTask(void *argument)
 void encoder(void *argument)
 {
   /* USER CODE BEGIN encoder */
-	uint32_t CA, CB, prevCA, prevCB;
+	int16_t CA, CB, prevCA, prevCB; // this might have to be unsigned for the pid controller. TODO
 	int32_t Adiff, Bdiff;
 	int32_t Adiffraw, Bdiffraw;
 
@@ -1257,21 +1455,29 @@ void encoder(void *argument)
 	  */
 	  prevCB = CB;
 
+	  Adist += (float)Adiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
 	  //Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-	  //Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-	  //Bdist += (float)Bdiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+	  Bdist -= (float)Bdiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
 
 	  // TODO: THIS PROBABLY OVERFLOWS AFTER A CERTAIN DISTANCE (CA/CB LOOPS BACK TO 0). ACCOUNT FOR THIS
-	  Adist = CA / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-	  if (CB == 0){
-		  CB = 65536;
-	  }
-	  Bdist = (65536 - CB) / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+	  //Adist = CA / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
 
+	  //if (CB == 0){
+	//	  CB = 65536;
+	 // }
+	  //Bdist = (65536 - CB) / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+	  //Bdist = -CB / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+
+	  average_dist = (Adist + Bdist) / 2; // TODO: PID!!!! PID!!
 	  //itoa(Adist * 1000, buf, 10);
-	  sprintf(buf, "%d %d", (int)Adist, (int)Bdist);
+	  sprintf(buf, "%d %d Dist: %d", (int)Adiff, (int)Bdiff, (int) average_dist);
 	  //OLED_ShowString(10,20, buf);
-	  display(buf, 2);
+	  display(buf, 3);
+
+	  // sucky bad feedforward gain compensation because me too dumb for pid controlelr
+	  // literally just measures the % diff between the wheels and adjusts the pwm value accordingly
+	  // gpt gave me this idea lol
+
 
 
 	  /*
@@ -1377,9 +1583,15 @@ void readICM(void *argument)
 	  // -------------- Gyroscope Readings ---------------------------------------
 	// Read Z axis
 	// send a byte to trigger read operation?
-	if(HAL_I2C_Master_Transmit(&hi2c2, 0x68 << 1, &z_reg_addr, 1, 1000)!= HAL_OK){
-		OLED_ShowString(10, 40, "ERROR 0");
-	}
+	  char errBuf[30];
+
+	  if (HAL_I2C_Master_Transmit(&hi2c2, 0x68 << 1, &z_reg_addr, 1, 1000) != HAL_OK)
+	  {
+	      uint32_t error = HAL_I2C_GetError(&hi2c2);
+
+	      sprintf(errBuf, "I2C ERR: 0x%lX", error);
+	      OLED_ShowString(10, 40, errBuf);
+	  }
 	// Read 2 hex bytes (MSB + LSB)
 	if (HAL_I2C_Master_Receive(&hi2c2, 0x68 << 1, rawData, 2, 1000)!=HAL_OK){
 		OLED_ShowString(10, 40, "ERROR 1");
@@ -1471,8 +1683,7 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
