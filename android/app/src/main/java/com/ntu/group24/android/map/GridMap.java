@@ -501,6 +501,16 @@ public class GridMap extends View {
         if (p.length == 0) return;
         String op = p[0].trim().toUpperCase(Locale.US);
 
+        if (cmd.trim().equalsIgnoreCase("RESET")) {
+            obstacles.clear();
+            robot.setX(1);
+            robot.setY(1);
+            robot.setDirection("N");
+            invalidate();
+            notifyRobotMovement();
+            return;
+        }
+
         switch (op) {
             case Constants.HEADER_ROBOT:
                 try {

@@ -111,6 +111,19 @@ public class MapFragment extends Fragment {
                 .replace(R.id.map_bottom_container, new ControlFragment())
                 .commit();
 
+        robotViewModel.getMoveRequest().observe(getViewLifecycleOwner(), direction -> {
+            if (direction != null && gridMap != null) {
+                gridMap.moveRobotManually(direction);
+                robotViewModel.requestMovement(null);
+            }
+        });
+
+        robotViewModel.getIncomingCommand().observe(getViewLifecycleOwner(), command -> {
+            if (command != null && gridMap != null) {
+                handleIncomingCommand(command);
+            }
+        });
+
         gridMap.setOnRobotMovedListener((x, y, direction) -> {
             if (isAdded()) {
                 // x and y are the Anchor (Bottom-Left)

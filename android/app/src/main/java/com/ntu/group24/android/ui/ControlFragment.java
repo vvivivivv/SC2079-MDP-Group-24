@@ -48,6 +48,7 @@ public class ControlFragment extends Fragment {
         Button btnTask1 = view.findViewById(R.id.btnTask1);
         Button btnTask2 = view.findViewById(R.id.btnTask2);
         Button btnCompute = view.findViewById(R.id.btnCompute);
+        Button btnResetMap = view.findViewById(R.id.btnResetMap);
         EditText etX = view.findViewById(R.id.etRobotX);
         EditText etY = view.findViewById(R.id.etRobotY);
         Button btnSet = view.findViewById(R.id.btnSetRobot);
@@ -77,6 +78,20 @@ public class ControlFragment extends Fragment {
                 String cmd = String.format(Locale.US, "ROBOT,%s,%s,N", xStr, yStr);
                 robotViewModel.setIncomingCommand(cmd);
             }
+        });
+
+        btnResetMap.setOnClickListener(v -> {
+            // Tell GridMap to reset locally
+            robotViewModel.setIncomingCommand("RESET");
+
+            // Tell Bluetooth to reset on RPi
+            MainActivity activity = (MainActivity) getActivity();
+            if (activity != null && activity.getBluetoothService() != null) {
+                activity.getBluetoothService().write("RESET");
+            }
+
+            broadcastStatus("Map Cleared & Robot Reset");
+            Toast.makeText(getContext(), "Map Reset", Toast.LENGTH_SHORT).show();
         });
     }
 
