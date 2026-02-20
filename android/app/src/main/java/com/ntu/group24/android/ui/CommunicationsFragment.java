@@ -70,12 +70,17 @@ public class CommunicationsFragment extends Fragment {
             tvStatus.setText(getString(R.string.status_format, status));
 
             int backgroundColor;
-            switch (status.toLowerCase()) {
+            String lowerStatus = status.toLowerCase();
+            switch (lowerStatus) {
                 case "connected":
                     backgroundColor = Color.parseColor("#C8E6C9"); // light green
                     break;
                 case "disconnected":
                     backgroundColor = Color.parseColor("#FFCDD2"); // light red
+                    break;
+                case "listening":
+                case "connecting":
+                    backgroundColor = Color.parseColor("#FFE0B2"); // Light Orange
                     break;
                 default:
                     backgroundColor = Color.parseColor("#EEEEEE"); // neutral

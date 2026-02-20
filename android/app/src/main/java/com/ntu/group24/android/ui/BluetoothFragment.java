@@ -81,7 +81,7 @@ public class BluetoothFragment extends Fragment {
             } else if (Constants.INTENT_CONNECTION_STATUS.equals(action)) {
                 String status = intent.getStringExtra("status");
 
-                if (status != null) {
+                if (status != null && tvConnectionStatus != null) {
                     tvConnectionStatus.setText(getString(R.string.status_format, status));
                     String lowerStatus = status.toLowerCase();
                     if (lowerStatus.equals("connected")) {
