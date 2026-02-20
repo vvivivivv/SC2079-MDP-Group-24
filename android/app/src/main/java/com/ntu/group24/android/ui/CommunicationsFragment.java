@@ -22,7 +22,9 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import androidx.lifecycle.ViewModelProvider;
 
+import com.ntu.group24.android.models.RobotViewModel;
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.utils.Constants;
 import com.ntu.group24.android.utils.CommsLog;
@@ -112,6 +114,13 @@ public class CommunicationsFragment extends Fragment {
         for (String line : CommsLog.snapshot()) {
             appendLine(line);
         }
+
+        TextView tvRobotStatus = root.findViewById(R.id.tvRobotStatusDisplay);
+        RobotViewModel robotViewModel = new ViewModelProvider(requireActivity()).get(RobotViewModel.class);
+        robotViewModel.getRobotStatus().observe(getViewLifecycleOwner(), status -> {
+            if (status != null) tvRobotStatus.setText(status);
+        });
+
         // Send message to AMD tool (C.1)
         etInput = root.findViewById(R.id.etInput);
         Button btnSend = root.findViewById(R.id.btnSend);

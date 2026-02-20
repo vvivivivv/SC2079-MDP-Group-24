@@ -57,4 +57,15 @@
             android:text="@string/btn_send" />
     </LinearLayout>
 
+    <TextView
+        android:id="@+id/tvRobotStatusDisplay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="#FFF9C4"
+        android:gravity="center"
+        android:padding="8dp"
+        android:text="@string/robot_initial"
+        android:textColor="#000000"
+        android:textStyle="bold" />
 </LinearLayout>

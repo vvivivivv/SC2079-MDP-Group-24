@@ -6,12 +6,15 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.Toast;
+import android.widget.EditText;
 import android.content.Intent;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
+
+import java.util.Locale;
 
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.utils.Constants;
@@ -45,6 +48,9 @@ public class ControlFragment extends Fragment {
         Button btnTask1 = view.findViewById(R.id.btnTask1);
         Button btnTask2 = view.findViewById(R.id.btnTask2);
         Button btnCompute = view.findViewById(R.id.btnCompute);
+        EditText etX = view.findViewById(R.id.etRobotX);
+        EditText etY = view.findViewById(R.id.etRobotY);
+        Button btnSet = view.findViewById(R.id.btnSetRobot);
 
         // Movement controls (C.3)
         btnForward.setOnClickListener(v -> moveRobot("FORWARD"));
@@ -62,6 +68,15 @@ public class ControlFragment extends Fragment {
 
             sendCommand(Constants.START_COMPUTATION);
             broadcastStatus("Computing Path...");
+        });
+
+        btnSet.setOnClickListener(v -> {
+            String xStr = etX.getText().toString();
+            String yStr = etY.getText().toString();
+            if (!xStr.isEmpty() && !yStr.isEmpty()) {
+                String cmd = String.format(Locale.US, "ROBOT,%s,%s,N", xStr, yStr);
+                robotViewModel.setIncomingCommand(cmd);
+            }
         });
     }
 
