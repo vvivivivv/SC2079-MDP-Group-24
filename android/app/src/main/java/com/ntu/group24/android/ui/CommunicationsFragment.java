@@ -28,23 +28,23 @@ import com.ntu.group24.android.models.RobotViewModel;
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.utils.Constants;
 import com.ntu.group24.android.utils.CommsLog;
+import java.util.Locale;
+
 
 public class CommunicationsFragment extends Fragment {
 
     private TextView tvLog;
     private TextView tvStatus;
+    private TextView tvTimer;
     private android.widget.EditText etInput;
-    private String formatElapsed(long ms) {
-        long totalSec = ms / 1000;
-        long min = totalSec / 60;
-        long sec = totalSec % 60;
-        long milli = ms % 1000;
-        return String.format(java.util.Locale.US, "%02d:%02d.%03d", min, sec, milli);
-    }
+
+    // prevents spamming "completed in ..." on every timer broadcast
+    private boolean lastTimerRunning = false;
+
     private final BroadcastReceiver commsReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (!isAdded() || getContext() == null) return;
+            if (!isAdded() || getContext() == null || intent == null) return;
 
             String action = intent.getAction();
             if (action == null) return;
@@ -59,52 +59,72 @@ public class CommunicationsFragment extends Fragment {
                 case Constants.INTENT_MESSAGE_SENT:
                     handleMessageSent(intent);
                     break;
-                case Constants.INTENT_ROBOT_ACTIVITY_STATUS:
+
+                case Constants.INTENT_ROBOT_ACTIVITY_STATUS: {
                     String activityStatus = intent.getStringExtra("message");
                     if (activityStatus != null && tvStatus != null) {
                         tvStatus.setText(activityStatus);
                         tvStatus.setBackgroundColor(Color.parseColor("#BBDEFB"));
                     }
                     break;
-                case Constants.INTENT_TIMER_UPDATE:
+                }
+
+                case Constants.INTENT_TIMER_UPDATE: {
                     boolean running = intent.getBooleanExtra(Constants.EXTRA_TIMER_RUNNING, false);
                     long elapsedMs = intent.getLongExtra(Constants.EXTRA_TIMER_ELAPSED_MS, 0L);
 
-                    String pretty = formatElapsed(elapsedMs);
-                    if (tvStatus != null) {
-                        tvStatus.setText(running ? "Exploration Time: " + pretty : "Completed in: " + pretty);
+                    if (tvTimer != null) {
+                        tvTimer.setText(formatElapsed(elapsedMs));
+                        tvTimer.setAlpha(running ? 1.0f : 0.7f);
                     }
-                    if (!running) appendLine("[STATUS] Exploration completed in " + pretty);
+
+                    // log completion only once when it transitions running -> not running
+                    if (lastTimerRunning && !running) {
+                        appendLine("[STATUS] Exploration completed in " + formatElapsed(elapsedMs));
+                    }
+                    lastTimerRunning = running;
                     break;
+                }
             }
         }
     };
 
+    private String formatElapsed(long ms) {
+        long totalSec = ms / 1000;
+        long min = totalSec / 60;
+        long sec = totalSec % 60;
+        long milli = ms % 1000;
+        return String.format(Locale.US, "%02d:%02d.%03d", min, sec, milli);
+    }
+
     private void handleStatusChange(Intent intent) {
         String status = intent.getStringExtra("status");
-        if (status != null && tvStatus != null) {
-            tvStatus.setText(getString(R.string.status_format, status));
+        if (status == null || tvStatus == null) return;
 
-            int backgroundColor;
-            String lowerStatus = status.toLowerCase();
-            switch (lowerStatus) {
-                case "connected":
-                    backgroundColor = Color.parseColor("#C8E6C9"); // light green
-                    break;
-                case "disconnected":
-                    backgroundColor = Color.parseColor("#FFCDD2"); // light red
-                    break;
-                case "listening":
-                case "connecting":
-                    backgroundColor = Color.parseColor("#FFE0B2"); // Light Orange
-                    break;
-                default:
-                    backgroundColor = Color.parseColor("#EEEEEE"); // neutral
-                    break;
-            }
-            tvStatus.setBackgroundColor(backgroundColor);
-            appendLine("[STATUS] " + status);
+        tvStatus.setText(getString(R.string.status_format, status));
+
+        int backgroundColor;
+        String lowerStatus = status.toLowerCase(Locale.US);
+
+        switch (lowerStatus) {
+            case "connected":
+                backgroundColor = Color.parseColor("#C8E6C9"); // light green
+                break;
+            case "disconnected":
+                backgroundColor = Color.parseColor("#FFCDD2"); // light red
+                break;
+            case "idle/listening":
+            case "listening":
+            case "connecting":
+                backgroundColor = Color.parseColor("#FFE0B2"); // light orange
+                break;
+            default:
+                backgroundColor = Color.parseColor("#EEEEEE"); // neutral
+                break;
         }
+
+        tvStatus.setBackgroundColor(backgroundColor);
+        appendLine("[STATUS] " + status);
     }
 
     private void handleMessageReceived(Intent intent) {
@@ -112,8 +132,14 @@ public class CommunicationsFragment extends Fragment {
         if (msg == null) return;
 
         Log.d("CommsFragment", "Fragment received RX: " + msg);
-
         appendLine("[RX] " + msg.trim());
+        // 🔥 NEW: If message contains Idle/Listening → update top status
+        if (msg.trim().equalsIgnoreCase("Idle/Listening")) {
+            if (tvStatus != null) {
+                tvStatus.setText("Status: Idle/Listening");
+                tvStatus.setBackgroundColor(Color.parseColor("#FFE0B2")); // light orange
+            }
+        }
     }
 
     private void handleMessageSent(Intent intent) {
@@ -130,6 +156,7 @@ public class CommunicationsFragment extends Fragment {
         View root = inflater.inflate(R.layout.fragment_communications, container, false);
         tvLog = root.findViewById(R.id.tvCommsLog);
         tvStatus = root.findViewById(R.id.tvCommsStatus);
+        tvTimer = root.findViewById(R.id.tvTimer);
 
         tvLog.setMovementMethod(new ScrollingMovementMethod());
         for (String line : CommsLog.snapshot()) {
@@ -142,21 +169,19 @@ public class CommunicationsFragment extends Fragment {
             if (status != null) tvRobotStatus.setText(status);
         });
 
-        // Send message to AMD tool (C.1)
         etInput = root.findViewById(R.id.etInput);
         Button btnSend = root.findViewById(R.id.btnSend);
 
         btnSend.setOnClickListener(v -> {
             String message = etInput.getText().toString().trim();
-            if (!message.isEmpty()) {
-                MainActivity activity = (MainActivity) getActivity();
-                if (activity != null && activity.getBluetoothService() != null) {
-                    activity.getBluetoothService().write(message);
+            if (message.isEmpty()) return;
 
-                    etInput.setText("");
-                } else {
-                    Toast.makeText(requireContext(), R.string.msg_not_connected, Toast.LENGTH_SHORT).show();
-                }
+            MainActivity activity = (MainActivity) getActivity();
+            if (activity != null && activity.getBluetoothService() != null) {
+                activity.getBluetoothService().write(message);
+                etInput.setText("");
+            } else {
+                Toast.makeText(requireContext(), R.string.msg_not_connected, Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -196,8 +221,6 @@ public class CommunicationsFragment extends Fragment {
 
         int scrollAmount = tvLog.getLayout() == null ? 0
                 : tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
-
         tvLog.scrollTo(0, Math.max(0, scrollAmount));
     }
-
 }
