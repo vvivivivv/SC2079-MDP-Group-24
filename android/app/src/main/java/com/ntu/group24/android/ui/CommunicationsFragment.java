@@ -34,7 +34,13 @@ public class CommunicationsFragment extends Fragment {
     private TextView tvLog;
     private TextView tvStatus;
     private android.widget.EditText etInput;
-
+    private String formatElapsed(long ms) {
+        long totalSec = ms / 1000;
+        long min = totalSec / 60;
+        long sec = totalSec % 60;
+        long milli = ms % 1000;
+        return String.format(java.util.Locale.US, "%02d:%02d.%03d", min, sec, milli);
+    }
     private final BroadcastReceiver commsReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -59,6 +65,16 @@ public class CommunicationsFragment extends Fragment {
                         tvStatus.setText(activityStatus);
                         tvStatus.setBackgroundColor(Color.parseColor("#BBDEFB"));
                     }
+                    break;
+                case Constants.INTENT_TIMER_UPDATE:
+                    boolean running = intent.getBooleanExtra(Constants.EXTRA_TIMER_RUNNING, false);
+                    long elapsedMs = intent.getLongExtra(Constants.EXTRA_TIMER_ELAPSED_MS, 0L);
+
+                    String pretty = formatElapsed(elapsedMs);
+                    if (tvStatus != null) {
+                        tvStatus.setText(running ? "Exploration Time: " + pretty : "Completed in: " + pretty);
+                    }
+                    if (!running) appendLine("[STATUS] Exploration completed in " + pretty);
                     break;
             }
         }
@@ -155,6 +171,7 @@ public class CommunicationsFragment extends Fragment {
         filter.addAction(Constants.INTENT_CONNECTION_STATUS);
         filter.addAction(Constants.INTENT_MESSAGE_SENT);
         filter.addAction(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
+        filter.addAction(Constants.INTENT_TIMER_UPDATE);
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(commsReceiver, filter);
     }
 

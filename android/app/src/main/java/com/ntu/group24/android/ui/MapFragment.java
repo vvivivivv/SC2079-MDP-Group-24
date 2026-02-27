@@ -33,7 +33,21 @@ public class MapFragment extends Fragment {
 
     private GridMap gridMap;
     private int currentTargetIndex = 0;
+    private long exploreStartMs = 0L;
+    private boolean exploreRunning = false;
+    //timer
+    private final android.os.Handler timerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable timerTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!exploreRunning) return;
 
+            long elapsed = System.currentTimeMillis() - exploreStartMs;
+            broadcastTimer(elapsed, true);
+
+            timerHandler.postDelayed(this, 250); // update 4x/sec
+        }
+    };
     // Resets ONLY when Task 1/Task 2 is sent (not every random TX)
     private final BroadcastReceiver taskResetReceiver = new BroadcastReceiver() {
         @Override
@@ -44,9 +58,17 @@ public class MapFragment extends Fragment {
             if (msg == null) return;
 
             if (msg.equals(Constants.START_EXPLORATION) || msg.equals(Constants.START_FASTEST_PATH)) {
+                startExploreTimer();
                 currentTargetIndex = 0;
                 Log.d("MapFragment", "Task started: Target index reset to 0");
             }
+        }
+    };
+    //timer
+    private final BroadcastReceiver endReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            stopExploreTimer();
         }
     };
 
@@ -294,6 +316,8 @@ public class MapFragment extends Fragment {
 
         // NEW: full sync signal from GridMap after delete/renumber/face change
         lbm.registerReceiver(fullSyncReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_MAP_DIRTY));
+        lbm.registerReceiver(endReceiver, new IntentFilter(Constants.INTENT_END_DETECTED));
+
     }
 
     @Override
@@ -304,6 +328,8 @@ public class MapFragment extends Fragment {
         lbm.unregisterReceiver(taskResetReceiver);
         lbm.unregisterReceiver(targetDetectedReceiver);
         lbm.unregisterReceiver(fullSyncReceiver);
+        lbm.unregisterReceiver(endReceiver);
+        stopExploreTimer(); // safety
     }
 
     private void broadcastRobotStatus(String status) {
@@ -312,4 +338,28 @@ public class MapFragment extends Fragment {
         intent.putExtra("message", status);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(intent);
     }
+    private void startExploreTimer() {
+        exploreStartMs = System.currentTimeMillis();
+        exploreRunning = true;
+        timerHandler.removeCallbacks(timerTick);
+        timerHandler.post(timerTick);
+    }
+
+    private void stopExploreTimer() {
+        if (!exploreRunning) return;
+        exploreRunning = false;
+        timerHandler.removeCallbacks(timerTick);
+
+        long elapsed = System.currentTimeMillis() - exploreStartMs;
+        broadcastTimer(elapsed, false);
+    }
+
+    private void broadcastTimer(long elapsedMs, boolean running) {
+        if (!isAdded()) return;
+        Intent i = new Intent(Constants.INTENT_TIMER_UPDATE);
+        i.putExtra(Constants.EXTRA_TIMER_RUNNING, running);
+        i.putExtra(Constants.EXTRA_TIMER_ELAPSED_MS, elapsedMs);
+        LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
+    }
+
 }

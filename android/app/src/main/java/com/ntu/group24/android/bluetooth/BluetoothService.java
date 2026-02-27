@@ -24,6 +24,7 @@ public class BluetoothService {
     private static final String APP_NAME = "MDP_Group24";
     private final BluetoothAdapter mBluetoothAdapter;
     private final Context mContext;
+    public static final String INTENT_END_DETECTED = "INTENT_END_DETECTED";
 
     private AcceptThread mAcceptThread;
     private ConnectThread mConnectThread;
@@ -207,6 +208,10 @@ public class BluetoothService {
                         if (!line.isEmpty()) {
                             sendMessageBroadcast(line);
                             tryParseAndEmitTarget(line);
+                            // NEW: detect END from RPi
+                            if (line.trim().equalsIgnoreCase("END")) {
+                                sendEndDetectedBroadcast();
+                            }
                             emittedLine = true;
                         }
                     }
@@ -385,5 +390,8 @@ public class BluetoothService {
         r.write(payload);
         Log.d(TAG, "Sent bytes: '" + message + "'" + (isMove ? " (no newline)" : " (with newline)"));
     }
-
+    private void sendEndDetectedBroadcast() {
+        Intent i = new Intent("INTENT_END_DETECTED");
+        LocalBroadcastManager.getInstance(mContext).sendBroadcast(i);
+    }
 }
