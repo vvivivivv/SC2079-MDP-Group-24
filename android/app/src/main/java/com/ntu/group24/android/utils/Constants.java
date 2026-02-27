@@ -54,5 +54,5 @@ public class Constants {
     public static final String EXTRA_TIMER_RUNNING = "timer_running";
     public static final String EXTRA_TIMER_ELAPSED_MS = "timer_elapsed_ms";
     public static final String INTENT_END_DETECTED = "INTENT_END_DETECTED";
-
+    public static final String INTENT_OBSTACLE_SYNC_REQUEST = "INTENT_OBSTACLE_SYNC_REQUEST";
 }

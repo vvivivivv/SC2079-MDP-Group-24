@@ -35,7 +35,7 @@ public class MapFragment extends Fragment {
     private int currentTargetIndex = 0;
     private long exploreStartMs = 0L;
     private boolean exploreRunning = false;
-    //timer
+    private boolean obstaclesDirty = false;
     private final android.os.Handler timerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable timerTick = new Runnable() {
         @Override
@@ -48,7 +48,7 @@ public class MapFragment extends Fragment {
             timerHandler.postDelayed(this, 250); // update 4x/sec
         }
     };
-    // Resets ONLY when Task 1/Task 2 is sent (not every random TX)
+
     private final BroadcastReceiver taskResetReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -72,7 +72,6 @@ public class MapFragment extends Fragment {
         }
     };
 
-    // C.9 receiver: RPi sends TARGET with obstacle no + imageId
     private final BroadcastReceiver targetDetectedReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -86,19 +85,23 @@ public class MapFragment extends Fragment {
                 return;
             }
 
-            Log.d("MapFragment", "TARGET detected: obstacleNo=" + obstacleNo + ", imageId=" + imageId);
-
             boolean updated = updateObstacleImageId(obstacleNo, imageId);
             if (!updated) Log.d("MapFragment", "No matching obstacle found for obstacleNo=" + obstacleNo);
         }
     };
 
-    // NEW: when GridMap renumbers/deletes/face-changes, do a full sync
-    private final BroadcastReceiver fullSyncReceiver = new BroadcastReceiver() {
+    // Now: only mark dirty + log pending change (no auto sync)
+    private final BroadcastReceiver dirtyReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (!isAdded() || gridMap == null) return;
-            syncAllObstaclesToRpi();
+            if (!isAdded()) return;
+
+            obstaclesDirty = true;
+
+            String msg = intent.getStringExtra("message");
+            if (msg != null) {
+                logComms("[PENDING] " + msg);
+            }
         }
     };
 
@@ -110,10 +113,20 @@ public class MapFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
-        RobotViewModel robotViewModel  = new ViewModelProvider(requireActivity()).get(RobotViewModel.class);
 
-        // Initialise Map and Set Robot Controls
+        RobotViewModel robotViewModel = new ViewModelProvider(requireActivity()).get(RobotViewModel.class);
+
         gridMap = view.findViewById(R.id.gridMap);
+
+        // NEW: Sync button (add this in your fragment_map.xml)
+        View btnSync = view.findViewById(R.id.btnSyncObstacles);
+        if (btnSync != null) {
+            btnSync.setOnClickListener(v -> {
+                syncAllObstaclesToRpi();
+                obstaclesDirty = false;
+                Toast.makeText(requireContext(), "Obstacles synced to RPi", Toast.LENGTH_SHORT).show();
+            });
+        }
 
         TabLayout subTabs = view.findViewById(R.id.map_sub_tabs);
         subTabs.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
@@ -128,7 +141,6 @@ public class MapFragment extends Fragment {
             @Override public void onTabReselected(TabLayout.Tab tab) {}
         });
 
-        // Load default (Controls)
         getChildFragmentManager().beginTransaction()
                 .replace(R.id.map_bottom_container, new ControlFragment())
                 .commit();
@@ -147,21 +159,18 @@ public class MapFragment extends Fragment {
         });
 
         gridMap.setOnRobotMovedListener((x, y, direction) -> {
-            if (isAdded()) {
-                // x and y are the Anchor (Bottom-Left)
-                int trX = x + 2;
-                int trY = y + 2;
+            if (!isAdded()) return;
 
-                // Update Tablet UI (Show Top-Right to user)
-                String status = getString(R.string.robot_status_format, trX, trY, direction);
-                robotViewModel.setRobotStatus(status);
+            int trX = x + 2;
+            int trY = y + 2;
 
-                // Sync AMD tool (Send Top-Right)
-                MainActivity activity = (MainActivity) getActivity();
-                if (activity != null && activity.getBluetoothService() != null) {
-                    String syncCommand = String.format(Locale.US, "ROBOT,%d,%d,%s\n", trX, trY, direction);
-                    activity.getBluetoothService().write(syncCommand);
-                }
+            String status = getString(R.string.robot_status_format, trX, trY, direction);
+            robotViewModel.setRobotStatus(status);
+
+            MainActivity activity = (MainActivity) getActivity();
+            if (activity != null && activity.getBluetoothService() != null) {
+                String syncCommand = String.format(Locale.US, "ROBOT,%d,%d,%s\n", trX, trY, direction);
+                activity.getBluetoothService().write(syncCommand);
             }
         });
 
@@ -177,6 +186,13 @@ public class MapFragment extends Fragment {
             });
         }
     }
+    private final BroadcastReceiver syncRequestReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!isAdded() || gridMap == null) return;
+            syncAllObstaclesToRpi();   // send now
+        }
+    };
 
     private void showAddObstacleDialog(int x0, int y0) {
         View dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_add_obstacle, null);
@@ -192,10 +208,10 @@ public class MapFragment extends Fragment {
                 .setTitle("Add Obstacle")
                 .setView(dialogView)
                 .setPositiveButton("Add", (d, which) -> {
+                    if (gridMap == null) return;
 
                     int id = gridMap.getNextObstacleId();
 
-                    // Default face
                     String faceStr = "N";
                     if (rgFace != null) {
                         int checkedId = rgFace.getCheckedRadioButtonId();
@@ -206,14 +222,10 @@ public class MapFragment extends Fragment {
 
                     Obstacle.Dir face = parseDir(faceStr);
 
-                    // Update UI
                     gridMap.upsertObstacle(id, x0, y0, face);
 
-                    MainActivity activity = (MainActivity) getActivity();
-                    if (activity != null && activity.getBluetoothService() != null) {
-                        String msg = String.format(Locale.US, Constants.OBSTACLE_ADD, id, x0, y0, faceStr);
-                        activity.getBluetoothService().write(msg);
-                    }
+                    obstaclesDirty = true;
+                    logComms("[PENDING] ADD," + id + "," + x0 + "," + y0 + "," + faceStr);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -228,7 +240,6 @@ public class MapFragment extends Fragment {
         }
     }
 
-    // Update obstacle with imageId (C.9)
     private boolean updateObstacleImageId(int obstacleNo, int imageId) {
         if (gridMap == null) return false;
 
@@ -245,15 +256,20 @@ public class MapFragment extends Fragment {
         }
         return false;
     }
-
-    // NEW: full sync map to RPi after any add/remove/renumber/face change
+    public void requestSyncObstacles() {
+        syncAllObstaclesToRpi();
+    }
+    // ONLY sends when Sync button pressed
     private void syncAllObstaclesToRpi() {
         if (!isAdded() || gridMap == null) return;
 
         MainActivity activity = (MainActivity) getActivity();
-        if (activity == null || activity.getBluetoothService() == null) return;
+        if (activity == null || activity.getBluetoothService() == null) {
+            Toast.makeText(requireContext(), "Bluetooth not ready", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
-        // Optional: if your RPi supports CLEAR
+        // If you support CLEAR on RPi
         activity.getBluetoothService().write("CLEAR");
 
         for (Obstacle o : gridMap.getObstacles().values()) {
@@ -264,6 +280,9 @@ public class MapFragment extends Fragment {
 
             activity.getBluetoothService().write(msg);
         }
+
+        obstacleDirty = false;
+        Toast.makeText(requireContext(), "Obstacles synced", Toast.LENGTH_SHORT).show();
     }
 
     private void logComms(String message) {
@@ -272,16 +291,11 @@ public class MapFragment extends Fragment {
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
     }
 
-
     public void handleIncomingCommand(String command) {
-        if (gridMap == null || command == null){
-            return;
-        }
+        if (gridMap == null || command == null) return;
 
-        // Update map display
         gridMap.applyCommand(command);
 
-        // Update status messages (C.4)
         if (command.startsWith("TARGET")) {
             String[] parts = command.split(",");
             try {
@@ -308,16 +322,11 @@ public class MapFragment extends Fragment {
 
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(requireContext());
 
-        // Task reset when Task 1/Task 2 is sent
         lbm.registerReceiver(taskResetReceiver, new IntentFilter(Constants.INTENT_MESSAGE_SENT));
-
-        // Target detected from BluetoothService (C.9)
         lbm.registerReceiver(targetDetectedReceiver, new IntentFilter(Constants.INTENT_TARGET_DETECTED));
-
-        // NEW: full sync signal from GridMap after delete/renumber/face change
-        lbm.registerReceiver(fullSyncReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_MAP_DIRTY));
+        lbm.registerReceiver(dirtyReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_MAP_DIRTY));
         lbm.registerReceiver(endReceiver, new IntentFilter(Constants.INTENT_END_DETECTED));
-
+        lbm.registerReceiver(syncRequestReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_SYNC_REQUEST));
     }
 
     @Override
@@ -327,9 +336,11 @@ public class MapFragment extends Fragment {
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(requireContext());
         lbm.unregisterReceiver(taskResetReceiver);
         lbm.unregisterReceiver(targetDetectedReceiver);
-        lbm.unregisterReceiver(fullSyncReceiver);
+        lbm.unregisterReceiver(dirtyReceiver);
         lbm.unregisterReceiver(endReceiver);
-        stopExploreTimer(); // safety
+        lbm.unregisterReceiver(syncRequestReceiver);
+
+        stopExploreTimer();
     }
 
     private void broadcastRobotStatus(String status) {
@@ -338,6 +349,15 @@ public class MapFragment extends Fragment {
         intent.putExtra("message", status);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(intent);
     }
+    private boolean obstacleDirty = false;
+
+    private final BroadcastReceiver fullSyncReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!isAdded() || gridMap == null) return;
+            obstacleDirty = true; // mark only
+        }
+    };
     private void startExploreTimer() {
         exploreStartMs = System.currentTimeMillis();
         exploreRunning = true;
@@ -361,5 +381,4 @@ public class MapFragment extends Fragment {
         i.putExtra(Constants.EXTRA_TIMER_ELAPSED_MS, elapsedMs);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
     }
-
 }
