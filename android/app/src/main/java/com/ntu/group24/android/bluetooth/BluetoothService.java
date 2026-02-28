@@ -208,9 +208,10 @@ public class BluetoothService {
                         if (!line.isEmpty()) {
                             sendMessageBroadcast(line);
                             tryParseAndEmitTarget(line);
-                            // NEW: detect END from RPi
-                            if (line.trim().equalsIgnoreCase("END")) {
+                            if (line.toUpperCase().contains("END")) {
+                                Log.d(TAG, "End signal detected in: " + line);
                                 sendEndDetectedBroadcast();
+                                sb.setLength(0);
                             }
                             emittedLine = true;
                         }
@@ -221,6 +222,12 @@ public class BluetoothService {
                         String msg = sb.toString().replace("\r", "").trim();
                         if (!msg.isEmpty()) {
                             sendMessageBroadcast(msg);
+                            tryParseAndEmitTarget(msg);
+                            
+                            if (msg.toUpperCase().contains("END")) {
+                                Log.d(TAG, "End signal detected in raw chunk: " + msg);
+                                sendEndDetectedBroadcast();
+                            }
                             sb.setLength(0);
                         }
                     }
@@ -391,7 +398,7 @@ public class BluetoothService {
         Log.d(TAG, "Sent bytes: '" + message + "'" + (isMove ? " (no newline)" : " (with newline)"));
     }
     private void sendEndDetectedBroadcast() {
-        Intent i = new Intent("INTENT_END_DETECTED");
+        Intent i = new Intent(Constants.INTENT_END_DETECTED);
         LocalBroadcastManager.getInstance(mContext).sendBroadcast(i);
     }
 }

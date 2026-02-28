@@ -54,4 +54,7 @@
     <string name="start_computation">Start Computation</string>
     <string name="reset">Reset</string>
 
+    <!-- Timer -->
+    <string name="timer">00:00.000</string>
+
 </resources>

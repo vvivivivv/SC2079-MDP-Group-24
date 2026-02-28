@@ -50,7 +50,14 @@ public class BluetoothFragment extends Fragment {
                 try {
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                     if (device != null && !mNewDevicesList.contains(device)) {
-                        mNewDevicesList.add(device);
+                        String deviceName = device.getName();
+
+                        if (deviceName != null && deviceName.equals("MDP Group 24")){
+                            mNewDevicesList.add(0, device);
+                        }
+                        else {
+                            mNewDevicesList.add(device);
+                        }
                         if (mDeviceAdapter != null) mDeviceAdapter.notifyDataSetChanged();
                     }
                 } catch (SecurityException e) {

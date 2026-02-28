@@ -198,6 +198,19 @@ public class CommunicationsFragment extends Fragment {
         filter.addAction(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
         filter.addAction(Constants.INTENT_TIMER_UPDATE);
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(commsReceiver, filter);
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity != null && activity.getBluetoothService() != null) {
+            String deviceName = activity.getBluetoothService().getConnectedDeviceName();
+
+            Intent fakeIntent = new Intent(Constants.INTENT_CONNECTION_STATUS);
+            if (!deviceName.equals("None")) {
+                fakeIntent.putExtra("status", "Connected");
+            } else {
+                fakeIntent.putExtra("status", "Disconnected");
+            }
+            handleStatusChange(fakeIntent);
+        }
     }
 
     @Override
@@ -219,8 +232,15 @@ public class CommunicationsFragment extends Fragment {
         ss.setSpan(new ForegroundColorSpan(color), 0, ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         tvLog.append(ss);
 
-        int scrollAmount = tvLog.getLayout() == null ? 0
-                : tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
-        tvLog.scrollTo(0, Math.max(0, scrollAmount));
+        // Auto scroll to the bottom of comms log
+        tvLog.post(() -> {
+            if (tvLog.getLayout() != null) {
+                final int scrollAmount = tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
+
+                if (scrollAmount > 0) {
+                    tvLog.scrollTo(0, scrollAmount);
+                }
+            }
+        });
     }
 }
