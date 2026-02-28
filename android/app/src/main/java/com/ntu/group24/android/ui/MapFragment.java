@@ -102,6 +102,17 @@ public class MapFragment extends Fragment {
         }
     };
 
+    private final BroadcastReceiver incomingMessageReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!isAdded()) return;
+            String msg = intent.getStringExtra("message");
+            if (msg != null) {
+                handleIncomingCommand(msg);
+            }
+        }
+    };
+
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         return inflater.inflate(R.layout.fragment_map, container, false);
@@ -281,6 +292,17 @@ public class MapFragment extends Fragment {
         // Update map display
         gridMap.applyCommand(command);
 
+        // Algo computation complete
+        if (command.trim().equalsIgnoreCase(Constants.COMP_DONE)) {
+            Log.d("MapFragment", "Handshake received: " + command);
+            broadcastRobotStatus("Path Computed - Ready to Start Task");
+
+            if (isAdded()) {
+                // Use Toast to give immediate feedback to the user
+                Toast.makeText(getContext(), "Computation Complete! Press Start.", Toast.LENGTH_LONG).show();
+            }
+        }
+
         // Update status messages (C.4)
         if (command.startsWith("TARGET")) {
             String[] parts = command.split(",");
@@ -318,6 +340,8 @@ public class MapFragment extends Fragment {
         lbm.registerReceiver(fullSyncReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_MAP_DIRTY));
         lbm.registerReceiver(endReceiver, new IntentFilter(Constants.INTENT_END_DETECTED));
 
+        // Listen for incoming msgs from RPi
+        lbm.registerReceiver(incomingMessageReceiver, new IntentFilter(Constants.INTENT_MESSAGE_RECEIVED));
     }
 
     @Override
@@ -329,6 +353,7 @@ public class MapFragment extends Fragment {
         lbm.unregisterReceiver(targetDetectedReceiver);
         lbm.unregisterReceiver(fullSyncReceiver);
         lbm.unregisterReceiver(endReceiver);
+        lbm.unregisterReceiver(incomingMessageReceiver);
         stopExploreTimer(); // safety
     }
 
