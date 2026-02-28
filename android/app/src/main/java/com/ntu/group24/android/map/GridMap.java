@@ -683,4 +683,8 @@ public class GridMap extends View {
 
         invalidate();
     }
+
+    public Robot getRobot() {
+        return robot;
+    }
 }

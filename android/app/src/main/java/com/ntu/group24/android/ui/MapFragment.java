@@ -35,7 +35,7 @@ public class MapFragment extends Fragment {
     private int currentTargetIndex = 0;
     private long exploreStartMs = 0L;
     private boolean exploreRunning = false;
-    private boolean obstaclesDirty = false;
+    private boolean isMapDirty = false;
     private final android.os.Handler timerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable timerTick = new Runnable() {
         @Override
@@ -99,7 +99,7 @@ public class MapFragment extends Fragment {
         public void onReceive(Context context, Intent intent) {
             if (!isAdded()) return;
 
-            obstaclesDirty = true;
+            isMapDirty = true;
 
             String msg = intent.getStringExtra("message");
             if (msg != null) {
@@ -138,7 +138,7 @@ public class MapFragment extends Fragment {
         if (btnSync != null) {
             btnSync.setOnClickListener(v -> {
                 syncAllObstaclesToRpi();
-                obstaclesDirty = false;
+                isMapDirty = false;
                 Toast.makeText(requireContext(), "Obstacles synced to RPi", Toast.LENGTH_SHORT).show();
             });
         }
@@ -187,6 +187,8 @@ public class MapFragment extends Fragment {
             if (activity != null && activity.getBluetoothService() != null) {
                 String syncCommand = String.format(Locale.US, "ROBOT,%d,%d,%s\n", trX, trY, direction);
                 activity.getBluetoothService().write(syncCommand);
+            } else {
+                isMapDirty = true;
             }
         });
 
@@ -242,7 +244,7 @@ public class MapFragment extends Fragment {
                     // Update UI
                     gridMap.upsertObstacle(id, x0, y0, face);
 
-                    obstaclesDirty = true;
+                    isMapDirty = true;
                     logComms("[PENDING] ADD," + id + "," + x0 + "," + y0 + "," + faceStr);
                 })
                 .setNegativeButton("Cancel", null)
@@ -275,9 +277,7 @@ public class MapFragment extends Fragment {
         }
         return false;
     }
-    public void requestSyncObstacles() {
-        syncAllObstaclesToRpi();
-    }
+
     // ONLY sends when Sync button pressed
     private void syncAllObstaclesToRpi() {
         if (!isAdded() || gridMap == null) return;
@@ -288,23 +288,29 @@ public class MapFragment extends Fragment {
             return;
         }
 
-        // Optional: if your RPi supports CLEAR
+        // 1. Clear RPi memory
         activity.getBluetoothService().write("CLEAR");
 
+        // 2. Send all obstacles
         for (Obstacle o : gridMap.getObstacles().values()) {
             if (o == null) continue;
-
             String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
                     o.getId(), o.getX(), o.getY(), o.getFace().name());
-
             activity.getBluetoothService().write(msg);
         }
 
-        obstacleDirty = false;
-        Toast.makeText(requireContext(), "Obstacles synced", Toast.LENGTH_SHORT).show();
+        int trX = gridMap.getRobot().getX() + 2;
+        int trY = gridMap.getRobot().getY() + 2;
+        String dir = gridMap.getRobot().getDirection();
+        String robotMsg = String.format(Locale.US, "ROBOT,%d,%d,%s", trX, trY, dir);
+        activity.getBluetoothService().write(robotMsg);
+
+        isMapDirty = false;
+        Toast.makeText(requireContext(), "Map fully synced to RPi", Toast.LENGTH_SHORT).show();
     }
 
     private void logComms(String message) {
+        com.ntu.group24.android.utils.CommsLog.add(message);
         Intent i = new Intent(Constants.INTENT_MESSAGE_SENT);
         i.putExtra("message", message);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
@@ -385,19 +391,12 @@ public class MapFragment extends Fragment {
 
     private void broadcastRobotStatus(String status) {
         if (!isAdded()) return;
+        String finalStatus = isMapDirty ? status + " (Unsynced)" : status;
         Intent intent = new Intent(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
-        intent.putExtra("message", status);
+        intent.putExtra("message", finalStatus);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(intent);
     }
-    private boolean obstacleDirty = false;
 
-    private final BroadcastReceiver fullSyncReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (!isAdded() || gridMap == null) return;
-            obstacleDirty = true; // mark only
-        }
-    };
     private void startExploreTimer() {
         exploreStartMs = System.currentTimeMillis();
         exploreRunning = true;

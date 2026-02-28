@@ -76,8 +76,9 @@
             <Button
                 android:id="@+id/btnSyncObstacles"
                 android:layout_width="match_parent"
-                android:layout_height="45dp"
-                android:text="Sync Obstacles" />
+                android:layout_height="38dp"
+                android:text="@string/sync"
+                android:textSize="11sp" />
 
             <Button
                 android:id="@+id/btnTask1"

@@ -145,7 +145,11 @@ public class CommunicationsFragment extends Fragment {
     private void handleMessageSent(Intent intent) {
         String cmd = intent.getStringExtra("message");
         if (cmd == null) return;
-        appendLine("[TX] " + cmd.trim());
+        if (cmd.startsWith("[")) {
+            appendLine(cmd.trim());
+        } else {
+            appendLine("[TX] " + cmd.trim());
+        }
     }
 
     @Nullable
@@ -227,6 +231,7 @@ public class CommunicationsFragment extends Fragment {
         if (line.startsWith("[TX]")) color = Color.parseColor("#1565C0");      // blue
         else if (line.startsWith("[RX]")) color = Color.parseColor("#2E7D32"); // green
         else if (line.startsWith("[STATUS]")) color = Color.parseColor("#616161"); // gray
+        else if (line.startsWith("[PENDING]")) color = Color.parseColor("#FF8F00");
 
         SpannableString ss = new SpannableString(line + "\n");
         ss.setSpan(new ForegroundColorSpan(color), 0, ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
