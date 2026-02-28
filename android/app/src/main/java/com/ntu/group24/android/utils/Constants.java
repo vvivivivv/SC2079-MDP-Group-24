@@ -48,6 +48,7 @@ public class Constants {
 
     // Early algo computation
     public static final String START_COMPUTATION = "CALC";
+    public static final String COMP_DONE = "COMPLETED";
 
     // Timer broadcasts
     public static final String INTENT_TIMER_UPDATE = "INTENT_TIMER_UPDATE";

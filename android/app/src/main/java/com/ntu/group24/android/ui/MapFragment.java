@@ -48,7 +48,7 @@ public class MapFragment extends Fragment {
             timerHandler.postDelayed(this, 250); // update 4x/sec
         }
     };
-
+    // Resets ONLY when Task 1/Task 2 is sent (not every random TX)
     private final BroadcastReceiver taskResetReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -72,6 +72,7 @@ public class MapFragment extends Fragment {
         }
     };
 
+    // C.9 receiver: RPi sends TARGET with obstacle no + imageId
     private final BroadcastReceiver targetDetectedReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -84,6 +85,8 @@ public class MapFragment extends Fragment {
                 Log.d("MapFragment", "Invalid TARGET payload: obstacleNo=" + obstacleNo + ", imageId=" + imageId);
                 return;
             }
+
+            Log.d("MapFragment", "TARGET detected: obstacleNo=" + obstacleNo + ", imageId=" + imageId);
 
             boolean updated = updateObstacleImageId(obstacleNo, imageId);
             if (!updated) Log.d("MapFragment", "No matching obstacle found for obstacleNo=" + obstacleNo);
@@ -105,6 +108,17 @@ public class MapFragment extends Fragment {
         }
     };
 
+    private final BroadcastReceiver incomingMessageReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!isAdded()) return;
+            String msg = intent.getStringExtra("message");
+            if (msg != null) {
+                handleIncomingCommand(msg);
+            }
+        }
+    };
+
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         return inflater.inflate(R.layout.fragment_map, container, false);
@@ -116,6 +130,7 @@ public class MapFragment extends Fragment {
 
         RobotViewModel robotViewModel = new ViewModelProvider(requireActivity()).get(RobotViewModel.class);
 
+        // Initialise Map and Set Robot Controls
         gridMap = view.findViewById(R.id.gridMap);
 
         // NEW: Sync button (add this in your fragment_map.xml)
@@ -141,6 +156,7 @@ public class MapFragment extends Fragment {
             @Override public void onTabReselected(TabLayout.Tab tab) {}
         });
 
+        // Load default (Controls)
         getChildFragmentManager().beginTransaction()
                 .replace(R.id.map_bottom_container, new ControlFragment())
                 .commit();
@@ -212,6 +228,7 @@ public class MapFragment extends Fragment {
 
                     int id = gridMap.getNextObstacleId();
 
+                    // Default face
                     String faceStr = "N";
                     if (rgFace != null) {
                         int checkedId = rgFace.getCheckedRadioButtonId();
@@ -222,6 +239,7 @@ public class MapFragment extends Fragment {
 
                     Obstacle.Dir face = parseDir(faceStr);
 
+                    // Update UI
                     gridMap.upsertObstacle(id, x0, y0, face);
 
                     obstaclesDirty = true;
@@ -240,6 +258,7 @@ public class MapFragment extends Fragment {
         }
     }
 
+    // Update obstacle with imageId (C.9)
     private boolean updateObstacleImageId(int obstacleNo, int imageId) {
         if (gridMap == null) return false;
 
@@ -269,7 +288,7 @@ public class MapFragment extends Fragment {
             return;
         }
 
-        // If you support CLEAR on RPi
+        // Optional: if your RPi supports CLEAR
         activity.getBluetoothService().write("CLEAR");
 
         for (Obstacle o : gridMap.getObstacles().values()) {
@@ -291,11 +310,27 @@ public class MapFragment extends Fragment {
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
     }
 
-    public void handleIncomingCommand(String command) {
-        if (gridMap == null || command == null) return;
 
+    public void handleIncomingCommand(String command) {
+        if (gridMap == null || command == null){
+            return;
+        }
+
+        // Update map display
         gridMap.applyCommand(command);
 
+        // Algo computation complete
+        if (command.trim().equalsIgnoreCase(Constants.COMP_DONE)) {
+            Log.d("MapFragment", "Handshake received: " + command);
+            broadcastRobotStatus("Path Computed - Ready to Start Task");
+
+            if (isAdded()) {
+                // Use Toast to give immediate feedback to the user
+                Toast.makeText(getContext(), "Computation Complete! Press Start.", Toast.LENGTH_LONG).show();
+            }
+        }
+
+        // Update status messages (C.4)
         if (command.startsWith("TARGET")) {
             String[] parts = command.split(",");
             try {
@@ -327,6 +362,9 @@ public class MapFragment extends Fragment {
         lbm.registerReceiver(dirtyReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_MAP_DIRTY));
         lbm.registerReceiver(endReceiver, new IntentFilter(Constants.INTENT_END_DETECTED));
         lbm.registerReceiver(syncRequestReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_SYNC_REQUEST));
+
+        // Listen for incoming msgs from RPi
+        lbm.registerReceiver(incomingMessageReceiver, new IntentFilter(Constants.INTENT_MESSAGE_RECEIVED));
     }
 
     @Override
@@ -338,6 +376,8 @@ public class MapFragment extends Fragment {
         lbm.unregisterReceiver(targetDetectedReceiver);
         lbm.unregisterReceiver(dirtyReceiver);
         lbm.unregisterReceiver(endReceiver);
+        lbm.unregisterReceiver(incomingMessageReceiver);
+        stopExploreTimer(); // safety
         lbm.unregisterReceiver(syncRequestReceiver);
 
         stopExploreTimer();
@@ -381,4 +421,5 @@ public class MapFragment extends Fragment {
         i.putExtra(Constants.EXTRA_TIMER_ELAPSED_MS, elapsedMs);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
     }
+
 }
