@@ -78,13 +78,10 @@ public class MainActivity extends AppCompatActivity {
         SectionsPagerAdapter adapter = new SectionsPagerAdapter(this);
         viewPager.setAdapter(adapter);
 
-        // Connect TabLayout and ViewPager2 (Added COMMS tab)
         new TabLayoutMediator(tabLayout, viewPager, (tab, position) -> {
             switch (position) {
-                case 0: tab.setText("MAP"); break;
-                case 1: tab.setText("CONTROLS"); break;
-                case 2: tab.setText("COMMS"); break;
-                case 3: tab.setText("BLUETOOTH"); break;
+                case 0: tab.setText("MAP & CONTROLS"); break;
+                case 1: tab.setText("BLUETOOTH"); break;
             }
         }).attach();
     }

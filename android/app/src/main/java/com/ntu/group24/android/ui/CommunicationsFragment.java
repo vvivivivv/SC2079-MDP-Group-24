@@ -22,21 +22,29 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import androidx.lifecycle.ViewModelProvider;
 
+import com.ntu.group24.android.models.RobotViewModel;
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.utils.Constants;
 import com.ntu.group24.android.utils.CommsLog;
+import java.util.Locale;
+
 
 public class CommunicationsFragment extends Fragment {
 
     private TextView tvLog;
     private TextView tvStatus;
+    private TextView tvTimer;
     private android.widget.EditText etInput;
+
+    // prevents spamming "completed in ..." on every timer broadcast
+    private boolean lastTimerRunning = false;
 
     private final BroadcastReceiver commsReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (!isAdded() || getContext() == null) return;
+            if (!isAdded() || getContext() == null || intent == null) return;
 
             String action = intent.getAction();
             if (action == null) return;
@@ -51,37 +59,72 @@ public class CommunicationsFragment extends Fragment {
                 case Constants.INTENT_MESSAGE_SENT:
                     handleMessageSent(intent);
                     break;
-                case Constants.INTENT_ROBOT_ACTIVITY_STATUS:
+
+                case Constants.INTENT_ROBOT_ACTIVITY_STATUS: {
                     String activityStatus = intent.getStringExtra("message");
                     if (activityStatus != null && tvStatus != null) {
                         tvStatus.setText(activityStatus);
                         tvStatus.setBackgroundColor(Color.parseColor("#BBDEFB"));
                     }
                     break;
+                }
+
+                case Constants.INTENT_TIMER_UPDATE: {
+                    boolean running = intent.getBooleanExtra(Constants.EXTRA_TIMER_RUNNING, false);
+                    long elapsedMs = intent.getLongExtra(Constants.EXTRA_TIMER_ELAPSED_MS, 0L);
+
+                    if (tvTimer != null) {
+                        tvTimer.setText(formatElapsed(elapsedMs));
+                        tvTimer.setAlpha(running ? 1.0f : 0.7f);
+                    }
+
+                    // log completion only once when it transitions running -> not running
+                    if (lastTimerRunning && !running) {
+                        appendLine("[STATUS] Exploration completed in " + formatElapsed(elapsedMs));
+                    }
+                    lastTimerRunning = running;
+                    break;
+                }
             }
         }
     };
 
+    private String formatElapsed(long ms) {
+        long totalSec = ms / 1000;
+        long min = totalSec / 60;
+        long sec = totalSec % 60;
+        long milli = ms % 1000;
+        return String.format(Locale.US, "%02d:%02d.%03d", min, sec, milli);
+    }
+
     private void handleStatusChange(Intent intent) {
         String status = intent.getStringExtra("status");
-        if (status != null && tvStatus != null) {
-            tvStatus.setText(getString(R.string.status_format, status));
+        if (status == null || tvStatus == null) return;
 
-            int backgroundColor;
-            switch (status.toLowerCase()) {
-                case "connected":
-                    backgroundColor = Color.parseColor("#C8E6C9"); // light green
-                    break;
-                case "disconnected":
-                    backgroundColor = Color.parseColor("#FFCDD2"); // light red
-                    break;
-                default:
-                    backgroundColor = Color.parseColor("#EEEEEE"); // neutral
-                    break;
-            }
-            tvStatus.setBackgroundColor(backgroundColor);
-            appendLine("[STATUS] " + status);
+        tvStatus.setText(getString(R.string.status_format, status));
+
+        int backgroundColor;
+        String lowerStatus = status.toLowerCase(Locale.US);
+
+        switch (lowerStatus) {
+            case "connected":
+                backgroundColor = Color.parseColor("#C8E6C9"); // light green
+                break;
+            case "disconnected":
+                backgroundColor = Color.parseColor("#FFCDD2"); // light red
+                break;
+            case "idle/listening":
+            case "listening":
+            case "connecting":
+                backgroundColor = Color.parseColor("#FFE0B2"); // light orange
+                break;
+            default:
+                backgroundColor = Color.parseColor("#EEEEEE"); // neutral
+                break;
         }
+
+        tvStatus.setBackgroundColor(backgroundColor);
+        appendLine("[STATUS] " + status);
     }
 
     private void handleMessageReceived(Intent intent) {
@@ -89,8 +132,14 @@ public class CommunicationsFragment extends Fragment {
         if (msg == null) return;
 
         Log.d("CommsFragment", "Fragment received RX: " + msg);
-
         appendLine("[RX] " + msg.trim());
+        // 🔥 NEW: If message contains Idle/Listening → update top status
+        if (msg.trim().equalsIgnoreCase("Idle/Listening")) {
+            if (tvStatus != null) {
+                tvStatus.setText("Status: Idle/Listening");
+                tvStatus.setBackgroundColor(Color.parseColor("#FFE0B2")); // light orange
+            }
+        }
     }
 
     private void handleMessageSent(Intent intent) {
@@ -107,26 +156,32 @@ public class CommunicationsFragment extends Fragment {
         View root = inflater.inflate(R.layout.fragment_communications, container, false);
         tvLog = root.findViewById(R.id.tvCommsLog);
         tvStatus = root.findViewById(R.id.tvCommsStatus);
+        tvTimer = root.findViewById(R.id.tvTimer);
 
         tvLog.setMovementMethod(new ScrollingMovementMethod());
         for (String line : CommsLog.snapshot()) {
             appendLine(line);
         }
-        // Send message to AMD tool (C.1)
+
+        TextView tvRobotStatus = root.findViewById(R.id.tvRobotStatusDisplay);
+        RobotViewModel robotViewModel = new ViewModelProvider(requireActivity()).get(RobotViewModel.class);
+        robotViewModel.getRobotStatus().observe(getViewLifecycleOwner(), status -> {
+            if (status != null) tvRobotStatus.setText(status);
+        });
+
         etInput = root.findViewById(R.id.etInput);
         Button btnSend = root.findViewById(R.id.btnSend);
 
         btnSend.setOnClickListener(v -> {
             String message = etInput.getText().toString().trim();
-            if (!message.isEmpty()) {
-                MainActivity activity = (MainActivity) getActivity();
-                if (activity != null && activity.getBluetoothService() != null) {
-                    activity.getBluetoothService().write(message);
+            if (message.isEmpty()) return;
 
-                    etInput.setText("");
-                } else {
-                    Toast.makeText(requireContext(), R.string.msg_not_connected, Toast.LENGTH_SHORT).show();
-                }
+            MainActivity activity = (MainActivity) getActivity();
+            if (activity != null && activity.getBluetoothService() != null) {
+                activity.getBluetoothService().write(message);
+                etInput.setText("");
+            } else {
+                Toast.makeText(requireContext(), R.string.msg_not_connected, Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -141,7 +196,21 @@ public class CommunicationsFragment extends Fragment {
         filter.addAction(Constants.INTENT_CONNECTION_STATUS);
         filter.addAction(Constants.INTENT_MESSAGE_SENT);
         filter.addAction(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
+        filter.addAction(Constants.INTENT_TIMER_UPDATE);
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(commsReceiver, filter);
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity != null && activity.getBluetoothService() != null) {
+            String deviceName = activity.getBluetoothService().getConnectedDeviceName();
+
+            Intent fakeIntent = new Intent(Constants.INTENT_CONNECTION_STATUS);
+            if (!deviceName.equals("None")) {
+                fakeIntent.putExtra("status", "Connected");
+            } else {
+                fakeIntent.putExtra("status", "Disconnected");
+            }
+            handleStatusChange(fakeIntent);
+        }
     }
 
     @Override
@@ -163,10 +232,15 @@ public class CommunicationsFragment extends Fragment {
         ss.setSpan(new ForegroundColorSpan(color), 0, ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         tvLog.append(ss);
 
-        int scrollAmount = tvLog.getLayout() == null ? 0
-                : tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
+        // Auto scroll to the bottom of comms log
+        tvLog.post(() -> {
+            if (tvLog.getLayout() != null) {
+                final int scrollAmount = tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
 
-        tvLog.scrollTo(0, Math.max(0, scrollAmount));
+                if (scrollAmount > 0) {
+                    tvLog.scrollTo(0, scrollAmount);
+                }
+            }
+        });
     }
-
 }
