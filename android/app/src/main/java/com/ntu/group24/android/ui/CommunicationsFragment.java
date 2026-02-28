@@ -198,6 +198,19 @@ public class CommunicationsFragment extends Fragment {
         filter.addAction(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
         filter.addAction(Constants.INTENT_TIMER_UPDATE);
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(commsReceiver, filter);
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity != null && activity.getBluetoothService() != null) {
+            String deviceName = activity.getBluetoothService().getConnectedDeviceName();
+
+            Intent fakeIntent = new Intent(Constants.INTENT_CONNECTION_STATUS);
+            if (!deviceName.equals("None")) {
+                fakeIntent.putExtra("status", "Connected");
+            } else {
+                fakeIntent.putExtra("status", "Disconnected");
+            }
+            handleStatusChange(fakeIntent);
+        }
     }
 
     @Override
