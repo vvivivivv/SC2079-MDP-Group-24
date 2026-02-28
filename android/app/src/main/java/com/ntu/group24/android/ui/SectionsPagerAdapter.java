@@ -15,9 +15,7 @@ public class SectionsPagerAdapter extends FragmentStateAdapter {
     @Override
     public Fragment createFragment(int position) {
         switch (position) {
-            case 1: return new ControlFragment();
-            case 2: return new CommunicationsFragment();
-            case 3: return new BluetoothFragment();
+            case 1: return new BluetoothFragment();
             case 0:
             default: return new MapFragment();
         }
@@ -25,6 +23,6 @@ public class SectionsPagerAdapter extends FragmentStateAdapter {
 
     @Override
     public int getItemCount() {
-        return 4;
+        return 2;
     }
 }

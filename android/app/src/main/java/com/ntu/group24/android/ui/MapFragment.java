@@ -4,12 +4,8 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.EditText;
-import android.widget.Spinner;
 import android.widget.Toast;
-import android.widget.TextView;
 import android.content.BroadcastReceiver;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -29,15 +25,29 @@ import com.ntu.group24.android.models.Obstacle;
 import com.ntu.group24.android.utils.Constants;
 import com.ntu.group24.android.models.RobotViewModel;
 
+import com.google.android.material.tabs.TabLayout;
+
 import java.util.Locale;
-import java.util.Map;
 
 public class MapFragment extends Fragment {
 
     private GridMap gridMap;
-    private TextView tvRobotStatus;
     private int currentTargetIndex = 0;
+    private long exploreStartMs = 0L;
+    private boolean exploreRunning = false;
+    //timer
+    private final android.os.Handler timerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable timerTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!exploreRunning) return;
 
+            long elapsed = System.currentTimeMillis() - exploreStartMs;
+            broadcastTimer(elapsed, true);
+
+            timerHandler.postDelayed(this, 250); // update 4x/sec
+        }
+    };
     // Resets ONLY when Task 1/Task 2 is sent (not every random TX)
     private final BroadcastReceiver taskResetReceiver = new BroadcastReceiver() {
         @Override
@@ -48,10 +58,17 @@ public class MapFragment extends Fragment {
             if (msg == null) return;
 
             if (msg.equals(Constants.START_EXPLORATION) || msg.equals(Constants.START_FASTEST_PATH)) {
+                startExploreTimer();
                 currentTargetIndex = 0;
                 Log.d("MapFragment", "Task started: Target index reset to 0");
-                broadcastRobotStatus("Ready to Start");
             }
+        }
+    };
+    //timer
+    private final BroadcastReceiver endReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            stopExploreTimer();
         }
     };
 
@@ -97,15 +114,25 @@ public class MapFragment extends Fragment {
 
         // Initialise Map and Set Robot Controls
         gridMap = view.findViewById(R.id.gridMap);
-        EditText etX = view.findViewById(R.id.etRobotX);
-        EditText etY = view.findViewById(R.id.etRobotY);
-        Button btnSet = view.findViewById(R.id.btnSetRobot);
-        tvRobotStatus = view.findViewById(R.id.tvRobotStatus);
 
-        // Initialise status for robot position
-        tvRobotStatus.setText(getString(R.string.robot_status_format, 3, 3, "N"));
+        TabLayout subTabs = view.findViewById(R.id.map_sub_tabs);
+        subTabs.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
+            @Override
+            public void onTabSelected(TabLayout.Tab tab) {
+                Fragment selected = (tab.getPosition() == 0) ? new ControlFragment() : new CommunicationsFragment();
+                getChildFragmentManager().beginTransaction()
+                        .replace(R.id.map_bottom_container, selected)
+                        .commit();
+            }
+            @Override public void onTabUnselected(TabLayout.Tab tab) {}
+            @Override public void onTabReselected(TabLayout.Tab tab) {}
+        });
 
-        // Observe changes from control fragment
+        // Load default (Controls)
+        getChildFragmentManager().beginTransaction()
+                .replace(R.id.map_bottom_container, new ControlFragment())
+                .commit();
+
         robotViewModel.getMoveRequest().observe(getViewLifecycleOwner(), direction -> {
             if (direction != null && gridMap != null) {
                 gridMap.moveRobotManually(direction);
@@ -127,34 +154,13 @@ public class MapFragment extends Fragment {
 
                 // Update Tablet UI (Show Top-Right to user)
                 String status = getString(R.string.robot_status_format, trX, trY, direction);
-                tvRobotStatus.setText(status);
+                robotViewModel.setRobotStatus(status);
 
                 // Sync AMD tool (Send Top-Right)
                 MainActivity activity = (MainActivity) getActivity();
                 if (activity != null && activity.getBluetoothService() != null) {
                     String syncCommand = String.format(Locale.US, "ROBOT,%d,%d,%s\n", trX, trY, direction);
                     activity.getBluetoothService().write(syncCommand);
-                }
-            }
-        });
-
-        btnSet.setOnClickListener(v -> {
-            String xStr = etX.getText().toString();
-            String yStr = etY.getText().toString();
-
-            if (!xStr.isEmpty() && !yStr.isEmpty()) {
-                try {
-                    int trX = Integer.parseInt(xStr);
-                    int trY = Integer.parseInt(yStr);
-
-                    // Apply to local GridMap
-                    String internalCmd = String.format(Locale.US, "ROBOT,%d,%d,N", trX, trY);
-                    gridMap.applyCommand(internalCmd);
-
-                    Toast.makeText(getContext(), "Robot set to TR: " + trX + "," + trY, Toast.LENGTH_SHORT).show();
-
-                } catch (NumberFormatException e) {
-                    Toast.makeText(getContext(), "Invalid numbers", Toast.LENGTH_SHORT).show();
                 }
             }
         });
@@ -310,6 +316,8 @@ public class MapFragment extends Fragment {
 
         // NEW: full sync signal from GridMap after delete/renumber/face change
         lbm.registerReceiver(fullSyncReceiver, new IntentFilter(Constants.INTENT_OBSTACLE_MAP_DIRTY));
+        lbm.registerReceiver(endReceiver, new IntentFilter(Constants.INTENT_END_DETECTED));
+
     }
 
     @Override
@@ -320,6 +328,8 @@ public class MapFragment extends Fragment {
         lbm.unregisterReceiver(taskResetReceiver);
         lbm.unregisterReceiver(targetDetectedReceiver);
         lbm.unregisterReceiver(fullSyncReceiver);
+        lbm.unregisterReceiver(endReceiver);
+        stopExploreTimer(); // safety
     }
 
     private void broadcastRobotStatus(String status) {
@@ -328,4 +338,28 @@ public class MapFragment extends Fragment {
         intent.putExtra("message", status);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(intent);
     }
+    private void startExploreTimer() {
+        exploreStartMs = System.currentTimeMillis();
+        exploreRunning = true;
+        timerHandler.removeCallbacks(timerTick);
+        timerHandler.post(timerTick);
+    }
+
+    private void stopExploreTimer() {
+        if (!exploreRunning) return;
+        exploreRunning = false;
+        timerHandler.removeCallbacks(timerTick);
+
+        long elapsed = System.currentTimeMillis() - exploreStartMs;
+        broadcastTimer(elapsed, false);
+    }
+
+    private void broadcastTimer(long elapsedMs, boolean running) {
+        if (!isAdded()) return;
+        Intent i = new Intent(Constants.INTENT_TIMER_UPDATE);
+        i.putExtra(Constants.EXTRA_TIMER_RUNNING, running);
+        i.putExtra(Constants.EXTRA_TIMER_ELAPSED_MS, elapsedMs);
+        LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
+    }
+
 }

@@ -50,7 +50,14 @@ public class BluetoothFragment extends Fragment {
                 try {
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                     if (device != null && !mNewDevicesList.contains(device)) {
-                        mNewDevicesList.add(device);
+                        String deviceName = device.getName();
+
+                        if (deviceName != null && deviceName.equals("MDP Group 24")){
+                            mNewDevicesList.add(0, device);
+                        }
+                        else {
+                            mNewDevicesList.add(device);
+                        }
                         if (mDeviceAdapter != null) mDeviceAdapter.notifyDataSetChanged();
                     }
                 } catch (SecurityException e) {
@@ -81,7 +88,7 @@ public class BluetoothFragment extends Fragment {
             } else if (Constants.INTENT_CONNECTION_STATUS.equals(action)) {
                 String status = intent.getStringExtra("status");
 
-                if (status != null) {
+                if (status != null && tvConnectionStatus != null) {
                     tvConnectionStatus.setText(getString(R.string.status_format, status));
                     String lowerStatus = status.toLowerCase();
                     if (lowerStatus.equals("connected")) {

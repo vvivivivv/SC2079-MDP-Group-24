@@ -6,12 +6,15 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.Toast;
+import android.widget.EditText;
 import android.content.Intent;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
+
+import java.util.Locale;
 
 import com.ntu.group24.android.R;
 import com.ntu.group24.android.utils.Constants;
@@ -44,6 +47,11 @@ public class ControlFragment extends Fragment {
         Button btnRight = view.findViewById(R.id.btnRight);
         Button btnTask1 = view.findViewById(R.id.btnTask1);
         Button btnTask2 = view.findViewById(R.id.btnTask2);
+        Button btnCompute = view.findViewById(R.id.btnCompute);
+        Button btnResetMap = view.findViewById(R.id.btnResetMap);
+        EditText etX = view.findViewById(R.id.etRobotX);
+        EditText etY = view.findViewById(R.id.etRobotY);
+        Button btnSet = view.findViewById(R.id.btnSetRobot);
 
         // Movement controls (C.3)
         btnForward.setOnClickListener(v -> moveRobot("FORWARD"));
@@ -54,6 +62,43 @@ public class ControlFragment extends Fragment {
         // Task controls
         btnTask1.setOnClickListener(v -> sendCommand(Constants.START_EXPLORATION));
         btnTask2.setOnClickListener(v -> sendCommand(Constants.START_FASTEST_PATH));
+
+        btnCompute.setOnClickListener(v -> {
+            Intent syncIntent = new Intent(Constants.INTENT_OBSTACLE_MAP_DIRTY);
+            LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(syncIntent);
+
+            sendCommand(Constants.START_COMPUTATION);
+            broadcastStatus("Computing Path...");
+        });
+
+        btnSet.setOnClickListener(v -> {
+            String xStr = etX.getText().toString();
+            String yStr = etY.getText().toString();
+            if (!xStr.isEmpty() && !yStr.isEmpty()) {
+                String cmd = String.format(Locale.US, "ROBOT,%s,%s,N", xStr, yStr);
+                robotViewModel.setIncomingCommand(cmd);
+            }
+        });
+
+        btnResetMap.setOnClickListener(v -> {
+            // Tell GridMap to reset locally
+            robotViewModel.setIncomingCommand("RESET");
+
+            // Tell Bluetooth to reset on RPi
+            MainActivity activity = (MainActivity) getActivity();
+            if (activity != null && activity.getBluetoothService() != null) {
+                activity.getBluetoothService().write("RESET");
+            }
+
+            broadcastStatus("Map Cleared & Robot Reset");
+            Toast.makeText(getContext(), "Map Reset", Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    private void broadcastStatus(String status) {
+        Intent statusIntent = new Intent(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
+        statusIntent.putExtra("message", status);
+        LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(statusIntent);
     }
 
     private void moveRobot(String direction) {
@@ -89,10 +134,16 @@ public class ControlFragment extends Fragment {
         activity.getBluetoothService().write(cmd);
 
         // Broadcast status for task buttons (C.4)
-        if (cmd.equals(Constants.START_EXPLORATION) || cmd.equals(Constants.START_FASTEST_PATH)) {
-            Intent statusIntent = new Intent(Constants.INTENT_ROBOT_ACTIVITY_STATUS);
-            statusIntent.putExtra("message", "Ready to Start: Looking for Target 1");
-            LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(statusIntent);
+        if (cmd.equals(Constants.START_EXPLORATION)) {
+            broadcastStatus("Ready to Start: Looking for Target 1");
+        }
+
+        else if (cmd.equals(Constants.START_FASTEST_PATH)) {
+            broadcastStatus("Task 2: Running Fastest Path");
+        }
+
+        else if (cmd.equals(Constants.START_COMPUTATION)) {
+            broadcastStatus("Computing Path...");
         }
 
         Toast.makeText(requireContext(), "Sent: " + cmd, Toast.LENGTH_SHORT).show();

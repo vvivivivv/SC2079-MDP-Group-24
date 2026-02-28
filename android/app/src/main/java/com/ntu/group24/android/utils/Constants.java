@@ -46,5 +46,13 @@ public class Constants {
     public static final String OBSTACLE_CLEAR_ALL = "CLEAR";
     public static final String INTENT_OBSTACLE_MAP_DIRTY = "INTENT_OBSTACLE_MAP_DIRTY";
 
+    // Early algo computation
+    public static final String START_COMPUTATION = "CALC";
+
+    // Timer broadcasts
+    public static final String INTENT_TIMER_UPDATE = "INTENT_TIMER_UPDATE";
+    public static final String EXTRA_TIMER_RUNNING = "timer_running";
+    public static final String EXTRA_TIMER_ELAPSED_MS = "timer_elapsed_ms";
+    public static final String INTENT_END_DETECTED = "INTENT_END_DETECTED";
 
 }
