@@ -1,24 +1,30 @@
 """
-MazeSolver: Obstacle visit ordering + smooth path planning + SPOT TURNS.
+MazeSolver: Reeds-Shepp transit + pivot-corrected CW aim-spins.
 
-SPOT-TURN ARCHITECTURE:
-  The robot drives like an Ackermann car between waypoints (S, L, R, B, BL, BR),
-  but can spin on the spot at each waypoint to face the obstacle before capture.
-
-  This decouples TRANSIT (get to position) from AIM (face the obstacle):
-  1. Get candidate capture positions for each obstacle (Entity.py)
-  2. Build TSP cost matrix using EUCLIDEAN DISTANCE (heading-free)
+ARCHITECTURE (optimized for physical speed):
+  1. Generate capture candidates for each obstacle (Entity.py)
+  2. Build TSP cost matrix using REEDS-SHEPP path length (heading-aware)
+     - Includes aim-spin time cost and stop/start penalty
   3. Solve TSP for optimal visit order
-  4. Plan each leg with Hybrid A* (position-only goal, Euclidean heuristic)
-  5. At each waypoint:
-       a. CW spin toward next waypoint (pre-drive — straightens path)
-       b. Drive with Ackermann primitives
-       c. CW spin to face obstacle image
-       d. SNAP
+  4. Plan each leg:
+     a. Try direct Reeds-Shepp path (fastest — no stopping)
+     b. If obstacles block it, fall back to Hybrid A* (RS heuristic)
+     c. At destination: small CW aim-spin (pivot-corrected) + SNAP
+
+  Why this is faster than spot-turn + straight:
+    - Heading changes happen WHILE DRIVING (no stopping)
+    - RS paths are provably shortest for car-like robots
+    - The TSP sees real driving costs, not Euclidean approximations
+    - Aim-spins are small (< 30 deg) because RS delivers close to right heading
+
+  Pivot-on-back-left-wheel:
+    CW spins pivot on the back-left wheel, not the center.
+    This shifts the robot position. We compute the displacement and
+    plan accordingly so the camera ends up aimed correctly.
 
   Command set:
-    FW/BW/FL/FR/BL/BR  — Ackermann drive
-    CW{deg}             — Spot turn clockwise by {deg} degrees
+    FW/BW/FL/FR/BL/BR  — Ackermann drive (from RS or A*)
+    CW{deg}             — Spot turn clockwise (pivot on back-left wheel)
     SNAP{id}            — Capture image
     FIN                 — Mission complete
 """
@@ -30,13 +36,173 @@ import numpy as np
 
 from entities.Robot import Robot
 from entities.Entity import Obstacle, CellState, Grid
-from consts import Direction, ITERATIONS
+from consts import (
+    Direction, ITERATIONS,
+    ROBOT_TURN_RADIUS_CM,
+    ROBOT_TURN_RADIUS_LEFT_CM, ROBOT_TURN_RADIUS_RIGHT_CM,
+    ROBOT_TURN_RADIUS_MAX_CM, ROBOT_TURN_RADIUS_MIN_CM,
+    ROBOT_SPEED_CM_S,
+    PIVOT_OFFSET_X, PIVOT_OFFSET_Y,
+    SPIN_SPEED_DEG_S, STOP_START_PENALTY_CM,
+    ROBOT_WHEELBASE_CM
+)
 from python_tsp.exact import solve_tsp_dynamic_programming
+from reeds_shepp import (
+    get_optimal_path_length, get_optimal_path_segments,
+    sample_path
+)
 from hybrid_astar import (
     hybrid_astar_search, path_to_commands, build_obstacle_list,
     TURN_RADIUS_CM, OBSTACLE_RADIUS_CM
 )
 
+
+# =============================================================================
+# PIVOT GEOMETRY — CW spin on back-left wheel
+# =============================================================================
+
+def compute_pivot_cw(cx, cy, theta_rad, spin_deg):
+    """Compute new pose after a CW spin pivoting on the back-left wheel.
+    
+    The back-left wheel stays fixed. The robot center traces an arc
+    around it. Both position and heading change.
+    
+    Args:
+        cx, cy: robot center position (cm)
+        theta_rad: robot heading (radians, math convention)
+        spin_deg: degrees to spin clockwise (positive = CW)
+    
+    Returns:
+        (new_cx, new_cy, new_theta_rad)
+    """
+    if abs(spin_deg) < 0.5:
+        return cx, cy, theta_rad
+
+    alpha = math.radians(spin_deg)  # CW rotation angle
+
+    # Back-left wheel position in world frame
+    cos_t = math.cos(theta_rad)
+    sin_t = math.sin(theta_rad)
+    pivot_x = cx + PIVOT_OFFSET_X * cos_t - PIVOT_OFFSET_Y * sin_t
+    pivot_y = cy + PIVOT_OFFSET_X * sin_t + PIVOT_OFFSET_Y * cos_t
+
+    # Rotate center around pivot (CW = negative mathematical rotation)
+    dx = cx - pivot_x
+    dy = cy - pivot_y
+    new_cx = pivot_x + dx * math.cos(alpha) + dy * math.sin(alpha)
+    new_cy = pivot_y - dx * math.sin(alpha) + dy * math.cos(alpha)
+    new_theta = theta_rad - alpha
+
+    return new_cx, new_cy, new_theta
+
+
+def compute_cw_spin_to_target(current_theta_rad, target_theta_rad):
+    """Compute CW spin angle to reach target heading.
+    
+    Only clockwise spins allowed (robot is unreliable CCW).
+    A left turn of X deg becomes CW (360-X) deg.
+    
+    Returns:
+        spin_deg (0-360, always positive = CW), or 0 if close enough
+    """
+    diff = target_theta_rad - current_theta_rad
+    diff = (diff + math.pi) % (2 * math.pi) - math.pi  # [-pi, pi]
+    diff_deg = math.degrees(diff)
+
+    if abs(diff_deg) < 3.0:
+        return 0.0  # close enough
+
+    if diff_deg > 0:
+        # Need CCW turn -> convert to CW
+        return 360.0 - abs(round(diff_deg))
+    else:
+        # Already CW direction
+        return abs(round(diff_deg))
+
+
+def compute_aim_spin_full(cx, cy, theta_rad, target_x, target_y):
+    """Compute CW spin + pivot displacement to aim camera at target point.
+    
+    Returns:
+        (spin_deg, new_cx, new_cy, new_theta)
+    """
+    target_theta = math.atan2(target_y - cy, target_x - cx)
+    spin_deg = compute_cw_spin_to_target(theta_rad, target_theta)
+
+    if spin_deg < 0.5:
+        return 0.0, cx, cy, theta_rad
+
+    new_cx, new_cy, new_theta = compute_pivot_cw(cx, cy, theta_rad, spin_deg)
+    return spin_deg, new_cx, new_cy, new_theta
+
+
+# =============================================================================
+# RS PATH COLLISION CHECKING
+# =============================================================================
+
+def check_rs_path_collision(start, end, radius, obstacles_expanded,
+                            skip_start_idx=None, skip_goal_idx=None):
+    """Check if a Reeds-Shepp path is collision-free.
+    
+    Samples the path and checks each point against obstacles and walls.
+    
+    Returns:
+        (is_clear, segments, total_length) or (False, None, inf)
+    """
+    ARENA = 200.0
+    CLEARANCE = 15.0
+    CAPTURE_CLEARANCE = 22.0
+
+    result = get_optimal_path_segments(start, end, radius)
+    if result is None:
+        return False, None, float('inf')
+
+    segments, total_length = result
+    points = sample_path(start, radius, segments=segments)
+
+    for px, py in points:
+        # Arena bounds
+        if px < CLEARANCE or px > ARENA - CLEARANCE:
+            return False, None, float('inf')
+        if py < CLEARANCE or py > ARENA - CLEARANCE:
+            return False, None, float('inf')
+
+        # Obstacle collision
+        for i, (ox, oy, orad) in enumerate(obstacles_expanded):
+            r = CAPTURE_CLEARANCE if i in (skip_start_idx, skip_goal_idx) else orad
+            if (px - ox)**2 + (py - oy)**2 < r**2:
+                return False, None, float('inf')
+
+    return True, segments, total_length
+
+
+def rs_segments_to_commands(segments):
+    """Convert Reeds-Shepp segments to robot commands.
+    
+    Segment format: (type, length_cm, gear)
+      type: 'L', 'R', 'S'
+      gear: 'F' (forward), 'B' (backward)
+    
+    Maps to: FL, FR, FW, BW, BL, BR commands.
+    """
+    commands = []
+    for seg_type, length_cm, gear in segments:
+        dist = max(1, round(length_cm))
+        if seg_type == 'S':
+            cmd = f"FW{dist}" if gear == 'F' else f"BW{dist}"
+        elif seg_type == 'L':
+            cmd = f"FL{dist}" if gear == 'F' else f"BL{dist}"
+        elif seg_type == 'R':
+            cmd = f"FR{dist}" if gear == 'F' else f"BR{dist}"
+        else:
+            continue
+        commands.append(cmd)
+    return commands
+
+
+# =============================================================================
+# MAZE SOLVER
+# =============================================================================
 
 class MazeSolver:
     def __init__(self, size_x, size_y, robot_x, robot_y,
@@ -71,53 +237,26 @@ class MazeSolver:
 
     @staticmethod
     def _state_to_xy(state: CellState):
-        """Convert CellState to (x_cm, y_cm) — position only, for A* goal."""
         if hasattr(state, 'theta_rad') and state.theta_rad is not None:
             return (state.x * 10, state.y * 10)
         else:
             return (state.x * 10 + 5, state.y * 10 + 5)
 
     # =================================================================
-    # EUCLIDEAN DISTANCE (replaces Reeds-Shepp for TSP cost matrix)
+    # REEDS-SHEPP TSP COST MATRIX
     # =================================================================
 
-    def _euclidean_distance_obstacle_aware(self, pos_a, pos_b, skip_ids=None):
-        """Euclidean distance with penalty if straight line crosses obstacles.
+    def _rs_travel_cost(self, pose_a, pose_b):
+        """Reeds-Shepp path length between two full poses.
         
-        Since heading doesn't matter (spot-turn), the cost between two
-        positions is approximately the Euclidean distance. We add a penalty
-        if obstacles block the direct path to encourage the TSP to avoid
-        orderings that require long detours.
+        This gives the TSP the REAL driving cost:
+        - RS path length (accounts for heading changes during transit)
+        - Stop/start penalty for the SNAP pause at destination
+        
+        Much more accurate than Euclidean for car-like robots.
         """
-        ax, ay = pos_a[0], pos_a[1]
-        bx, by = pos_b[0], pos_b[1]
-        dx, dy = bx - ax, by - ay
-        base_dist = math.sqrt(dx*dx + dy*dy)
-        
-        if not self.obstacle_centers:
-            return base_dist
-        
-        skip = skip_ids or set()
-        line_len = base_dist
-        
-        penalty = 0
-        for ox, oy, oid in self.obstacle_centers:
-            if oid in skip:
-                continue
-            # Point-to-line-segment distance
-            if line_len < 1e-6:
-                d = math.sqrt((ox-ax)**2 + (oy-ay)**2)
-            else:
-                t = max(0, min(1, ((ox-ax)*dx + (oy-ay)*dy) / (line_len*line_len)))
-                px, py = ax + t*dx, ay + t*dy
-                d = math.sqrt((ox-px)**2 + (oy-py)**2)
-            
-            if d < OBSTACLE_RADIUS_CM:
-                penalty = max(penalty, 80.0)
-            elif d < OBSTACLE_RADIUS_CM + 15:
-                penalty = max(penalty, 25.0)
-        
-        return base_dist + penalty
+        rs_len = get_optimal_path_length(pose_a, pose_b, ROBOT_TURN_RADIUS_MAX_CM)
+        return rs_len + STOP_START_PENALTY_CM
 
     # =================================================================
     # VISIT ORDER (TSP)
@@ -147,7 +286,7 @@ class MazeSolver:
             current.pop()
 
     def get_optimal_order_dp(self, retrying) -> Tuple[List[CellState], float]:
-        """Find optimal visit order using Euclidean-based TSP."""
+        """Find optimal visit order using Reeds-Shepp TSP costs."""
         all_view_positions = self.grid.get_view_obstacle_positions(retrying)
         if not all_view_positions:
             return [], 1e9
@@ -156,11 +295,11 @@ class MazeSolver:
         best_path = []
 
         start_state = self.robot.get_start_state()
-        start_xy = self._state_to_xy(start_state)
+        start_pose = self._state_to_pose(start_state)
 
         for op in self._get_visit_options(len(all_view_positions)):
             items_states = [start_state]
-            items_xy = [start_xy]
+            items_poses = [start_pose]
             cur_view_positions = []
 
             for idx in range(len(all_view_positions)):
@@ -168,27 +307,20 @@ class MazeSolver:
                     cur_view_positions.append(all_view_positions[idx])
                     for vp in all_view_positions[idx]:
                         items_states.append(vp)
-                        items_xy.append(self._state_to_xy(vp))
+                        items_poses.append(self._state_to_pose(vp))
 
             if not cur_view_positions:
                 continue
 
-            # Pairwise Euclidean distances (obstacle-aware)
-            n_total = len(items_xy)
-            all_ob_ids = [s.screenshot_id for s in items_states]
-
+            # Pairwise RS distances (heading-aware)
+            n_total = len(items_poses)
             full_cost = np.zeros((n_total, n_total))
             for s in range(n_total):
                 for e in range(n_total):
                     if s == e:
                         continue
-                    skip = set()
-                    if all_ob_ids[s] != -1:
-                        skip.add(all_ob_ids[s])
-                    if all_ob_ids[e] != -1:
-                        skip.add(all_ob_ids[e])
-                    full_cost[s][e] = self._euclidean_distance_obstacle_aware(
-                        items_xy[s], items_xy[e], skip_ids=skip)
+                    full_cost[s][e] = self._rs_travel_cost(
+                        items_poses[s], items_poses[e])
 
             # Try candidate combinations
             combinations = []
@@ -235,54 +367,29 @@ class MazeSolver:
         return best_path, best_distance
 
     # =================================================================
-    # SPIN COMMAND GENERATION — ALWAYS CLOCKWISE (CW)
-    # =================================================================
-
-    @staticmethod
-    def _compute_spin(current_theta_rad, target_x_cm, target_y_cm, robot_x_cm, robot_y_cm):
-        """Compute the clockwise spot-turn needed to face a target point.
-        
-        All turns are clockwise because the robot turns better that way.
-        A left turn of X deg becomes a clockwise turn of (360-X) deg.
-        
-        Returns:
-            (command_str, new_theta_rad) e.g. ("CW68", 1.57)
-            or (None, current_theta_rad) if already facing it
-        """
-        target_theta = math.atan2(target_y_cm - robot_y_cm, target_x_cm - robot_x_cm)
-        diff = target_theta - current_theta_rad
-        diff = (diff + math.pi) % (2 * math.pi) - math.pi  # normalize to [-pi, pi]
-        diff_deg = math.degrees(diff)
-
-        if abs(diff_deg) < 3.0:
-            return None, current_theta_rad  # close enough, no spin needed
-
-        # Always clockwise: left turn of X deg = CW (360-X) deg
-        if diff_deg > 0:
-            deg = 360 - abs(round(diff_deg))
-        else:
-            deg = abs(round(diff_deg))
-
-        return f"CW{deg}", target_theta
-
-    # =================================================================
     # MAIN PIPELINE
     # =================================================================
 
     def plan_full_route(self, retrying=False, obstacles_data=None):
-        """Full pipeline: TSP + Hybrid A* + spot-turn + SNAP.
+        """Full pipeline: RS-based TSP + RS/A* transit + pivot aim-spin + SNAP.
         
-        Each leg follows: pre-spin -> drive -> aim-spin -> snap
+        For each leg:
+          1. Try direct Reeds-Shepp path (collision-free check)
+             -> If clear: use it (fastest, no stopping)
+          2. If blocked: Hybrid A* with RS heuristic, heading-constrained
+          3. If that fails: Hybrid A* position-only (fallback)
+          4. Small CW aim-spin (pivot-corrected) to face obstacle
+          5. SNAP
         
         Returns:
             (commands, waypoint_path, distance)
         """
         t0 = time.time()
 
-        # Phase 1: TSP ordering (Euclidean cost — fast)
+        # Phase 1: TSP ordering
         waypoint_path, distance = self.get_optimal_order_dp(retrying)
         t_tsp = time.time() - t0
-        print(f"Phase 1 (Euclidean TSP): {t_tsp:.2f}s, distance={distance:.0f}cm")
+        print(f"Phase 1 (RS-based TSP): {t_tsp:.2f}s, distance={distance:.0f}cm")
 
         if not waypoint_path:
             print("No valid path found!")
@@ -293,7 +400,7 @@ class MazeSolver:
                 print(f"  Visit ob{s.screenshot_id} at "
                       f"({s.x:.1f},{s.y:.1f}) {Direction(s.direction).name}")
 
-        # Phase 2: Drive + Spin + Snap for each leg
+        # Phase 2: Plan each leg
         t1 = time.time()
         obs_expanded = build_obstacle_list(obstacles_data) if obstacles_data else []
         obstacles_dict = {ob['id']: ob for ob in obstacles_data} if obstacles_data else {}
@@ -307,9 +414,9 @@ class MazeSolver:
             wp_to = waypoint_path[i + 1]
 
             start_pose = current_pose
-            goal_xy = self._state_to_xy(wp_to)  # position only!
+            goal_pose = self._state_to_pose(wp_to)
 
-            # Obstacle index for radius relaxation
+            # Obstacle indices for radius relaxation
             start_ob_idx = None
             goal_ob_idx = None
             if wp_from.screenshot_id != -1 and wp_from.screenshot_id in ob_id_to_idx:
@@ -317,48 +424,82 @@ class MazeSolver:
             if wp_to.screenshot_id != -1 and wp_to.screenshot_id in ob_id_to_idx:
                 goal_ob_idx = ob_id_to_idx[wp_to.screenshot_id]
 
-            # --- PRE-SPIN: face toward next waypoint before driving ---
-            # Without this, the robot starts each leg facing the obstacle
-            # it just snapped and has to wiggle with arcs to change direction.
-            # A quick spot-turn first makes the A* path nearly straight.
-            rx, ry, rtheta = start_pose
-            gx, gy = goal_xy
-            spin_cmd, new_theta = self._compute_spin(
-                rtheta, gx, gy, rx, ry)
-            if spin_cmd:
-                commands.append(spin_cmd)
-                start_pose = (rx, ry, new_theta)
-                current_pose = start_pose
+            leg_commands = []
+            leg_ok = False
 
-            # --- DRIVE: Hybrid A* to reach position ---
-            path, iters = hybrid_astar_search(
-                start_pose, goal_xy, obs_expanded,
-                start_obstacle_idx=start_ob_idx,
-                goal_obstacle_idx=goal_ob_idx)
+            # --- ATTEMPT 1: Direct Reeds-Shepp path ---
+            # Use MAX radius (conservative — guaranteed to fit through gaps)
+            is_clear, segments, rs_len = check_rs_path_collision(
+                start_pose, goal_pose, ROBOT_TURN_RADIUS_MAX_CM,
+                obs_expanded,
+                skip_start_idx=start_ob_idx,
+                skip_goal_idx=goal_ob_idx)
 
-            if path is None:
-                # Retry with relaxed tolerance
+            if is_clear and segments:
+                leg_commands = rs_segments_to_commands(segments)
+                current_pose = (goal_pose[0], goal_pose[1], goal_pose[2])
+                leg_ok = True
+                print(f"  Leg {i}: RS direct, {rs_len:.0f}cm, "
+                      f"{len(segments)} segments")
+
+            # --- ATTEMPT 2: Hybrid A* heading-constrained ---
+            if not leg_ok:
                 path, iters = hybrid_astar_search(
-                    start_pose, goal_xy, obs_expanded,
-                    goal_tolerance_cm=12.0,
+                    start_pose, goal_pose, obs_expanded,
+                    position_only=False,
                     start_obstacle_idx=start_ob_idx,
                     goal_obstacle_idx=goal_ob_idx)
 
-            if path:
-                seg_cmds = path_to_commands(path)
-                commands.extend(seg_cmds)
-                end = path[-1]
-                current_pose = (end[0], end[1], end[2])
-                print(f"  Leg {i}: {len(path)} steps, {iters} iters")
-            else:
-                print(f"  Leg {i}: SKIPPED (no path found, {iters} iters)")
+                if path:
+                    leg_commands = path_to_commands(path)
+                    end = path[-1]
+                    current_pose = (end[0], end[1], end[2])
+                    leg_ok = True
+                    print(f"  Leg {i}: A* heading-aware, {iters} iters, "
+                          f"{len(path)} steps")
+
+            # --- ATTEMPT 3: Hybrid A* position-only ---
+            if not leg_ok:
+                path, iters = hybrid_astar_search(
+                    start_pose, goal_pose, obs_expanded,
+                    position_only=True,
+                    start_obstacle_idx=start_ob_idx,
+                    goal_obstacle_idx=goal_ob_idx)
+
+                if path:
+                    leg_commands = path_to_commands(path)
+                    end = path[-1]
+                    current_pose = (end[0], end[1], end[2])
+                    leg_ok = True
+                    print(f"  Leg {i}: A* position-only, {iters} iters")
+
+            # --- ATTEMPT 4: Relaxed tolerance ---
+            if not leg_ok:
+                path, iters = hybrid_astar_search(
+                    start_pose, goal_pose, obs_expanded,
+                    goal_tolerance_cm=12.0,
+                    position_only=True,
+                    start_obstacle_idx=start_ob_idx,
+                    goal_obstacle_idx=goal_ob_idx)
+
+                if path:
+                    leg_commands = path_to_commands(path)
+                    end = path[-1]
+                    current_pose = (end[0], end[1], end[2])
+                    leg_ok = True
+                    print(f"  Leg {i}: A* relaxed, {iters} iters")
+
+            if not leg_ok:
+                print(f"  Leg {i}: SKIPPED (no path found)")
                 continue
 
-            # --- AIM-SPIN: rotate to face the obstacle image ---
+            commands.extend(leg_commands)
+
+            # --- AIM-SPIN: pivot-corrected CW to face obstacle ---
             if wp_to.screenshot_id != -1 and obstacles_dict:
                 ob = obstacles_dict[wp_to.screenshot_id]
 
-                # Compute face center
+                # Obstacle face center
                 face_offsets = {
                     0: (0, 5), 2: (5, 0), 4: (0, -5), 6: (-5, 0)}
                 fx, fy = face_offsets.get(ob['d'], (0, 0))
@@ -366,12 +507,12 @@ class MazeSolver:
                 face_y = ob['y'] * 10 + 5 + fy
 
                 rx, ry, rtheta = current_pose
-                spin_cmd, new_theta = self._compute_spin(
-                    rtheta, face_x, face_y, rx, ry)
+                spin_deg, new_rx, new_ry, new_theta = compute_aim_spin_full(
+                    rx, ry, rtheta, face_x, face_y)
 
-                if spin_cmd:
-                    commands.append(spin_cmd)
-                    current_pose = (rx, ry, new_theta)
+                if spin_deg > 0.5:
+                    commands.append(f"CW{int(round(spin_deg))}")
+                    current_pose = (new_rx, new_ry, new_theta)
 
                 # --- SNAP ---
                 commands.append(f"SNAP{wp_to.screenshot_id}")
@@ -379,9 +520,9 @@ class MazeSolver:
         commands.append("FIN")
         commands = self._compress_commands(commands)
 
-        t_astar = time.time() - t1
-        print(f"Phase 2 (A* + spin): {t_astar:.2f}s")
-        print(f"Total: {t_tsp + t_astar:.2f}s, {len(commands)} commands")
+        t_plan = time.time() - t1
+        print(f"Phase 2 (RS/A* + spin): {t_plan:.2f}s")
+        print(f"Total: {t_tsp + t_plan:.2f}s, {len(commands)} commands")
 
         return commands, waypoint_path, distance
 

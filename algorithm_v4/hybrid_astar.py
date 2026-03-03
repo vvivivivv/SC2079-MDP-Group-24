@@ -1,44 +1,53 @@
 """
-Hybrid A* pathfinding with SPOT-TURN capability.
+Hybrid A* pathfinding — Reeds-Shepp heuristic + heading-aware goal.
 
-KEY DIFFERENCE FROM REEDS-SHEPP VERSION:
-  The robot can spin on the spot at waypoints, so the A* only needs to
-  reach the correct (x, y) position — heading is irrelevant at arrival.
-  
-  This means:
-  - Heuristic: Euclidean distance (fast, admissible)
-  - Goal check: position only (no heading constraint)
-  - Search space: effectively 2.5D instead of 3D (heading still needed
-    for motion primitives, but not for goal matching)
-  - Result: dramatically faster search, shorter paths, no zigzag approaches
+TWO MODES:
+  1. HEADING-CONSTRAINED (default): reach (x, y, theta) within tolerance.
+     Used when Reeds-Shepp direct path is blocked by obstacles.
+     Tighter heuristic => fewer expansions, shorter physical paths.
 
-State: continuous (x, y, theta)
-Motion primitives: S, L, R, B, BL, BR (Ackermann transit)
-Goal: reach (x, y) within tolerance — any heading accepted
-Spin: handled AFTER arrival by algo.py (TL/TR commands)
+  2. POSITION-ONLY (fallback): reach (x, y), any heading.
+     Used when heading-constrained search fails (very cluttered areas).
+     The caller adds a small CW aim-spin afterward.
+
+Heuristic: Reeds-Shepp optimal path length (analytic, ~0.05ms per call).
+  This is a TIGHT admissible heuristic that accounts for turning radius,
+  so the search expands far fewer nodes than Euclidean and finds shorter
+  drivable paths — especially when large heading changes are needed.
 """
 
 import math
 import heapq
 from consts import (
     ROBOT_TURN_RADIUS_CM,
+    ROBOT_TURN_RADIUS_LEFT_CM,
+    ROBOT_TURN_RADIUS_RIGHT_CM,
+    ROBOT_TURN_RADIUS_MAX_CM,
+    ROBOT_TURN_RADIUS_MIN_CM,
     ROBOT_SPEED_CM_S,
     ROBOT_WHEELBASE_CM,
     ROBOT_RADIUS_CM
 )
+from reeds_shepp import get_optimal_path_length
 
 
 # =============================================================================
 # PARAMETERS
 # =============================================================================
-TURN_RADIUS_CM = ROBOT_TURN_RADIUS_CM
+# Asymmetric radii: left and right arcs use different radii.
+# MAX is used for collision checking (conservative — robot needs this much space).
+# MIN is used for RS heuristic (admissible — robot CAN turn this tight).
+TURN_RADIUS_LEFT_CM = ROBOT_TURN_RADIUS_LEFT_CM
+TURN_RADIUS_RIGHT_CM = ROBOT_TURN_RADIUS_RIGHT_CM
+TURN_RADIUS_CM = ROBOT_TURN_RADIUS_MAX_CM
+TURN_RADIUS_HEURISTIC_CM = ROBOT_TURN_RADIUS_MIN_CM
 STEP_SIZE_CM = 8.0
 ARENA_SIZE_CM = 200.0
 ROBOT_CLEARANCE_CM = 15.0
 
 # Discretization
 CELL_SIZE_CM = 4.0
-N_THETA_BUCKETS = 72          # 5 deg each (still needed for motion primitives)
+N_THETA_BUCKETS = 72
 THETA_RES = 2 * math.pi / N_THETA_BUCKETS
 
 # Search
@@ -112,26 +121,26 @@ def _check_arc_collision(x0, y0, theta0, arc_angle, turn_radius, direction, obst
 # =============================================================================
 
 def _precompute_euler_deltas():
-    """Precompute movement deltas at heading=0 (EAST) using bicycle model."""
-    R = ROBOT_TURN_RADIUS_CM
+    """Precompute with ASYMMETRIC left/right turning radii."""
     L = ROBOT_WHEELBASE_CM
     speed = ROBOT_SPEED_CM_S
     dt = 1.0 / 60.0
     step = STEP_SIZE_CM
 
-    delta_max = math.atan(L / R)
+    delta_max_left = math.atan(L / TURN_RADIUS_LEFT_CM)
+    delta_max_right = math.atan(L / TURN_RADIUS_RIGHT_CM)
 
     deltas = {}
     primitives = [
-        ('S',   speed,  0.0),
-        ('L',   speed,  delta_max),
-        ('R',   speed, -delta_max),
-        ('B',  -speed,  0.0),
-        ('BL', -speed,  delta_max),
-        ('BR', -speed, -delta_max),
+        ('S',   speed,  0.0,              None),
+        ('L',   speed,  delta_max_left,   TURN_RADIUS_LEFT_CM),
+        ('R',   speed, -delta_max_right,  TURN_RADIUS_RIGHT_CM),
+        ('B',  -speed,  0.0,              None),
+        ('BL', -speed,  delta_max_left,   TURN_RADIUS_LEFT_CM),
+        ('BR', -speed, -delta_max_right,  TURN_RADIUS_RIGHT_CM),
     ]
 
-    for name, v, delta in primitives:
+    for name, v, delta, radius in primitives:
         x, y, t = 0.0, 0.0, 0.0
         traveled = 0.0
         omega = (v / L) * math.tan(delta) if abs(delta) > 1e-9 else 0.0
@@ -140,7 +149,7 @@ def _precompute_euler_deltas():
             y += v * math.sin(t) * dt
             t += omega * dt
             traveled += abs(v * dt)
-        deltas[name] = (x, y, t)
+        deltas[name] = (x, y, t, radius)
 
     return deltas
 
@@ -149,7 +158,7 @@ _EULER_DELTAS = _precompute_euler_deltas()
 
 def _get_successors(x, y, theta, obstacles, prev_move=None):
     results = []
-    for move, (dx, dy, dt) in _EULER_DELTAS.items():
+    for move, (dx, dy, dt, move_radius) in _EULER_DELTAS.items():
         cos_t = math.cos(theta)
         sin_t = math.sin(theta)
         nx = x + dx * cos_t - dy * sin_t
@@ -165,7 +174,8 @@ def _get_successors(x, y, theta, obstacles, prev_move=None):
         else:
             arc_angle = abs(dt)
             direction = 'L' if move in ('L', 'BL') else 'R'
-            if _check_arc_collision(x, y, theta, arc_angle, TURN_RADIUS_CM, direction, obstacles):
+            radius = move_radius if move_radius else TURN_RADIUS_CM
+            if _check_arc_collision(x, y, theta, arc_angle, radius, direction, obstacles):
                 continue
 
         is_reverse = move in ('B', 'BL', 'BR')
@@ -182,44 +192,64 @@ def _get_successors(x, y, theta, obstacles, prev_move=None):
 
 
 # =============================================================================
-# EUCLIDEAN HEURISTIC (replaces Reeds-Shepp — much faster)
+# REEDS-SHEPP HEURISTIC (tight, admissible)
 # =============================================================================
 
+def _h_reeds_shepp(x, y, theta, gx, gy, gtheta):
+    """Reeds-Shepp path length as heuristic.
+    
+    Admissible because RS gives the shortest possible path length
+    in obstacle-free space. The actual path (with obstacles) can
+    only be longer.
+    """
+    return get_optimal_path_length(
+        (x, y, theta), (gx, gy, gtheta), TURN_RADIUS_HEURISTIC_CM)
+
 def _h_euclidean(x, y, gx, gy):
-    """Euclidean distance heuristic. Admissible since the robot cannot
-    reach a point faster than straight-line distance regardless of heading."""
+    """Euclidean fallback for position-only mode."""
     return math.sqrt((x - gx)**2 + (y - gy)**2)
 
 
 # =============================================================================
-# HYBRID A* SEARCH — POSITION-ONLY GOAL
+# HYBRID A* SEARCH — HEADING-CONSTRAINED (PRIMARY MODE)
 # =============================================================================
 
-def hybrid_astar_search(start, goal_xy, obstacles_expanded,
+def hybrid_astar_search(start, goal, obstacles_expanded,
                         goal_tolerance_cm=5.0,
-                        start_obstacle_idx=None, goal_obstacle_idx=None):
-    """Find shortest path from start to goal POSITION (heading-free).
+                        heading_tolerance_rad=0.35,  # ~20 degrees
+                        position_only=False,
+                        start_obstacle_idx=None,
+                        goal_obstacle_idx=None):
+    """Find path from start pose to goal pose.
     
-    The robot will spot-turn at the goal to face the obstacle, so we
-    only need to reach the correct (x, y). This makes the search much
-    faster and more reliable than heading-constrained search.
+    PRIMARY MODE (position_only=False):
+        Goal = (x, y, theta). Uses Reeds-Shepp heuristic.
+        Robot arrives at the right position AND heading,
+        minimizing or eliminating the aim-spin.
+    
+    FALLBACK MODE (position_only=True):
+        Goal = (x, y). Uses Euclidean heuristic.
+        Caller adds aim-spin afterward. Used when heading-constrained
+        search fails (very tight spaces).
     
     Args:
-        start: (x, y, theta) — robot's current pose
-        goal_xy: (x, y) — target position (heading irrelevant)
+        start: (x, y, theta) start pose
+        goal: (x, y, theta) target pose (theta ignored if position_only)
         obstacles_expanded: list of (cx, cy, radius)
-        goal_tolerance_cm: how close to goal position counts as arrival
+        goal_tolerance_cm: position tolerance
+        heading_tolerance_rad: heading tolerance (heading mode only)
+        position_only: if True, ignore goal heading
         start_obstacle_idx: reduce this obstacle's radius near start
         goal_obstacle_idx: reduce this obstacle's radius near goal
     
     Returns:
         (path, iterations) where path = [(x, y, theta, move), ...]
-        path[-1] gives the final pose (with actual arrival heading)
     """
     sx, sy, st = start
-    gx, gy = goal_xy
+    gx, gy = goal[0], goal[1]
+    gt = goal[2] if len(goal) > 2 and not position_only else st
 
-    # Reduce radius for start/goal obstacles to allow close approach
+    # Reduce radius for start/goal obstacles
     CAPTURE_CLEARANCE = 22.0
     obs_for_search = []
     for i, (ox, oy, orad) in enumerate(obstacles_expanded):
@@ -235,7 +265,12 @@ def hybrid_astar_search(start, goal_xy, obstacles_expanded,
 
     sk = _grid_key(sx, sy, st)
     g_cost[sk] = 0
-    h_start = _h_euclidean(sx, sy, gx, gy)
+
+    if position_only:
+        h_start = _h_euclidean(sx, sy, gx, gy)
+    else:
+        h_start = _h_reeds_shepp(sx, sy, st, gx, gy, gt)
+
     heapq.heappush(open_set, (h_start, counter, sx, sy, st, None))
 
     iterations = 0
@@ -245,20 +280,33 @@ def hybrid_astar_search(start, goal_xy, obstacles_expanded,
         ck = _grid_key(cx, cy, ct)
 
         cur_g = g_cost.get(ck, float('inf'))
-        if cur_g < f - _h_euclidean(cx, cy, gx, gy) - 1e-6:
+        if position_only:
+            h_cur = _h_euclidean(cx, cy, gx, gy)
+        else:
+            h_cur = _h_reeds_shepp(cx, cy, ct, gx, gy, gt)
+
+        if cur_g < f - h_cur - 1e-6:
             continue
 
-        # POSITION-ONLY goal check (no heading constraint!)
+        # Goal check
         dist = math.sqrt((cx - gx)**2 + (cy - gy)**2)
         if dist < goal_tolerance_cm:
-            path = [(cx, cy, ct, 'GOAL')]
-            key = ck
-            while key in parent:
-                pkey, move, px, py, pt = parent[key]
-                path.append((px, py, pt, move))
-                key = pkey
-            path.reverse()
-            return path, iterations
+            if position_only:
+                goal_reached = True
+            else:
+                # Check heading too
+                hdiff = abs((ct - gt + math.pi) % (2 * math.pi) - math.pi)
+                goal_reached = hdiff < heading_tolerance_rad
+
+            if goal_reached:
+                path = [(cx, cy, ct, 'GOAL')]
+                key = ck
+                while key in parent:
+                    pkey, move, px, py, pt = parent[key]
+                    path.append((px, py, pt, move))
+                    key = pkey
+                path.reverse()
+                return path, iterations
 
         for nx, ny, nt, cost, move in _get_successors(cx, cy, ct, obs_for_search, prev_move):
             new_g = cur_g + cost
@@ -267,22 +315,21 @@ def hybrid_astar_search(start, goal_xy, obstacles_expanded,
                 g_cost[nk] = new_g
                 parent[nk] = (ck, move, cx, cy, ct)
                 counter += 1
-                h = _h_euclidean(nx, ny, gx, gy)
+                if position_only:
+                    h = _h_euclidean(nx, ny, gx, gy)
+                else:
+                    h = _h_reeds_shepp(nx, ny, nt, gx, gy, gt)
                 heapq.heappush(open_set, (new_g + h, counter, nx, ny, nt, move))
 
     return None, iterations
 
 
 # =============================================================================
-# PATH TO DRIVE COMMANDS (spin is added by algo.py, not here)
+# PATH TO DRIVE COMMANDS
 # =============================================================================
 
 def path_to_commands(path):
-    """Convert Hybrid A* path to drive commands only.
-    
-    Spin commands (TL/TR) are NOT generated here — they are added by
-    algo.py after the drive phase, since the spin angle depends on which
-    obstacle face we need to photograph.
+    """Convert Hybrid A* path to drive commands.
     
     Commands:
       S  -> FW{dist}   forward straight
@@ -329,7 +376,6 @@ def path_to_commands(path):
 # =============================================================================
 
 def build_obstacle_list(obstacles):
-    """Convert obstacle dicts to (cx, cy, radius) tuples."""
     expanded = []
     for ob in obstacles:
         cx = ob['x'] * 10 + 5

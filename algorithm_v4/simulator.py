@@ -6,12 +6,16 @@ import time
 import requests
 import tkinter
 from tkinter import filedialog, simpledialog
-from consts import ROBOT_SPEED_CM_S, ROBOT_AXLE_TRACK_CM, ROBOT_TURN_RADIUS_CM, ROBOT_WHEELBASE_CM
+from consts import (
+    ROBOT_SPEED_CM_S, ROBOT_AXLE_TRACK_CM, ROBOT_TURN_RADIUS_CM,
+    ROBOT_TURN_RADIUS_LEFT_CM, ROBOT_TURN_RADIUS_RIGHT_CM,
+    ROBOT_WHEELBASE_CM, PIVOT_OFFSET_X, PIVOT_OFFSET_Y
+)
 
 # =============================================================================
 # 1. LIVE TUNING VARIABLES (GLOBALS)
 # =============================================================================
-CURRENT_SPEED = ROBOT_SPEED_CM_S # cm/s
+CURRENT_SPEED = ROBOT_SPEED_CM_S
 TURN_SPEED_DEG_S = 120           # Degrees per second for spot turns
 
 # =============================================================================
@@ -24,16 +28,14 @@ WINDOW_HEIGHT = 800
 ARENA_WIDTH = 800
 FPS = 60
 
-# Arena Settings
 GRID_SIZE = 200
 CELL_SIZE_CM = 10
 GRID_COLS = 20
 GRID_ROWS = 20
 
-# Robot Settings
 ROBOT_SIZE_CM = 30
-ROBOT_AXLE_TRACK = ROBOT_AXLE_TRACK_CM  # Distance between wheels
-SCAN_DURATION = 1.0      # Time to stop for scanning
+ROBOT_AXLE_TRACK = ROBOT_AXLE_TRACK_CM
+SCAN_DURATION = 1.0
 
 # Colors
 WHITE = (255, 255, 255)
@@ -75,7 +77,6 @@ def load_obstacles_from_json(filepath):
             x = obs_data.get('x', 0)
             y = obs_data.get('y', 0)
             direction = obs_data.get('direction', obs_data.get('d', 0))
-            # Normalize direction
             if direction <= 6:
                 if direction == 0: direction = 0
                 elif direction == 2: direction = 90
@@ -116,8 +117,8 @@ def save_obstacles_to_json(obstacles, filepath):
 class Obstacle:
     _id_counter = 1
     def __init__(self, col, row, direction=0, obstacle_id=None):
-        self.col = col; self.row = row; self.direction = direction 
-        self.is_scanned = False  
+        self.col = col; self.row = row; self.direction = direction
+        self.is_scanned = False
         if obstacle_id is None:
             self.id = Obstacle._id_counter
             Obstacle._id_counter += 1
@@ -135,7 +136,7 @@ class Obstacle:
 
     def draw(self, surface):
         x_cm = self.col * CELL_SIZE_CM
-        y_cm = (self.row + 1) * CELL_SIZE_CM 
+        y_cm = (self.row + 1) * CELL_SIZE_CM
         px_x, px_y = grid_to_pixel(x_cm, y_cm)
         size_px = int((CELL_SIZE_CM / GRID_SIZE) * ARENA_WIDTH)
         rect = pygame.Rect(px_x, px_y, size_px, size_px)
@@ -147,29 +148,28 @@ class Obstacle:
         id_text = font.render(str(self.id), True, text_color)
         text_rect = id_text.get_rect(center=(px_x + size_px//2, px_y + size_px//2))
         surface.blit(id_text, text_rect)
-        
-        # Direction Indicator
+
         start_pos = (0,0); end_pos = (0,0)
-        if self.direction == 0:   # North
+        if self.direction == 0:
             start_pos = (px_x, px_y); end_pos = (px_x + size_px, px_y)
-        elif self.direction == 90: # East
+        elif self.direction == 90:
             start_pos = (px_x + size_px, px_y); end_pos = (px_x + size_px, px_y + size_px)
-        elif self.direction == 180: # South
+        elif self.direction == 180:
             start_pos = (px_x, px_y + size_px); end_pos = (px_x + size_px, px_y + size_px)
-        else: # West
+        else:
             start_pos = (px_x, px_y); end_pos = (px_x, px_y + size_px)
         pygame.draw.line(surface, BLACK, start_pos, end_pos, 4)
 
+
 class Robot:
     def __init__(self, x, y, theta):
-        self.x = x; self.y = y; self.theta = theta 
-        
-        # Save start/default positions
+        self.x = x; self.y = y; self.theta = theta
+
         self.start_x = x; self.start_y = y; self.start_theta = theta
         self.default_x = x; self.default_y = y; self.default_theta = theta
 
         self.is_running = False
-        self.commands = []     
+        self.commands = []
         self._cached_commands = []
         self.ghost_path = []
         self.path_history = [(x, y)]
@@ -178,16 +178,20 @@ class Robot:
         self.target_val = 0; self.traveled_val = 0
         self.pause_end_time = 0
 
-        # --- TURNING VARIABLES (New) ---
-        self.angle_to_turn = 0    # Total degrees to turn
-        self.angle_traveled = 0   # Degrees turned so far
-        self.turn_direction = 0   # 1 for Left/CCW, -1 for Right/CW
-        
-        # --- ACKERMANN VARIABLES ---
-        self.velocity = 0.0        # cm/s
-        self.steering_angle = 0.0  # radians
-        
-        # Visual assets (Keep existing code...)
+        # Turning variables
+        self.angle_to_turn = 0
+        self.angle_traveled = 0
+        self.turn_direction = 0   # -1 for CW
+
+        # Pivot-on-back-left-wheel state
+        self.pivot_x = 0.0
+        self.pivot_y = 0.0
+
+        # Ackermann variables
+        self.velocity = 0.0
+        self.steering_angle = 0.0
+
+        # Visual assets
         scale = ARENA_WIDTH / GRID_SIZE
         size_px = int(ROBOT_SIZE_CM * scale)
         self.original_surf = pygame.Surface((size_px, size_px), pygame.SRCALPHA)
@@ -195,7 +199,6 @@ class Robot:
         w, h = size_px, size_px
         pygame.draw.line(self.original_surf, YELLOW, (w/2, h/2), (w, h/2), 3)
 
-    # (Keep reset_position, reset_all, has_cached_mission, start_from_cache, start_mission exactly as they were)
     def reset_position(self):
         self.x = self.start_x; self.y = self.start_y; self.theta = self.start_theta
         self.is_running = False; self.path_history = [(self.x, self.y)]
@@ -226,33 +229,66 @@ class Robot:
         self.is_running = True; self.current_cmd_idx = 0
 
     def execute_manual_command(self, cmd_str):
-        """Injects a single command and executes it immediately."""
         self.commands = [cmd_str]
         self.is_running = True
         self.current_cmd_idx = 0
-        self.state = "IDLE" # Will trigger _decode_command on next update loop
-        self.path_history = [(self.x, self.y)] # Optional: Reset path or keep it
+        self.state = "IDLE"
+        self.path_history = [(self.x, self.y)]
         print(f"Executing Manual Command: {cmd_str}")
 
     # =========================================================================
-    # NEW: ACKERMANN PHYSICS ENGINE
+    # PIVOT-ON-BACK-LEFT-WHEEL HELPER
+    # =========================================================================
+    def _compute_pivot_point(self):
+        """Compute the back-left wheel position in world frame.
+        
+        Robot frame: x = forward (along self.theta), y = left
+        Back-left wheel offset: (PIVOT_OFFSET_X, PIVOT_OFFSET_Y)
+        """
+        theta_rad = math.radians(self.theta)
+        cos_t = math.cos(theta_rad)
+        sin_t = math.sin(theta_rad)
+        self.pivot_x = self.x + PIVOT_OFFSET_X * cos_t - PIVOT_OFFSET_Y * sin_t
+        self.pivot_y = self.y + PIVOT_OFFSET_X * sin_t + PIVOT_OFFSET_Y * cos_t
+
+    def _rotate_around_pivot(self, delta_deg):
+        """Rotate robot center around the fixed pivot point (back-left wheel).
+        
+        For CW rotation: delta_deg is positive, heading decreases.
+        The center traces a circular arc around the pivot.
+        """
+        alpha = math.radians(delta_deg)  # CW rotation angle
+
+        # Vector from pivot to center
+        dx = self.x - self.pivot_x
+        dy = self.y - self.pivot_y
+
+        # Rotate CW (negative mathematical rotation)
+        self.x = self.pivot_x + dx * math.cos(alpha) + dy * math.sin(alpha)
+        self.y = self.pivot_y - dx * math.sin(alpha) + dy * math.cos(alpha)
+
+        # Heading decreases for CW
+        self.theta -= delta_deg
+
+    # =========================================================================
+    # PHYSICS ENGINE
     # =========================================================================
     def update(self):
         if not self.is_running: return None
-        dt = 1.0 / FPS 
+        dt = 1.0 / FPS
 
-        # 1. Handle SNAP (Scanning)
+        # 1. Handle SNAP
         if self.state == "SCANNING":
             if time.time() > self.pause_end_time:
                 self.state = "IDLE"
                 current_cmd = self.commands[self.current_cmd_idx]
                 parts = current_cmd.replace("SNAP", "").split("_")
                 self.current_cmd_idx += 1
-                return int(parts[0]) 
+                return int(parts[0])
             else:
                 return None
 
-        # 2. Handle IDLE (Fetch next command)
+        # 2. Handle IDLE
         if self.state == "IDLE":
             if self.current_cmd_idx >= len(self.commands):
                 self.is_running = False
@@ -261,54 +297,44 @@ class Robot:
             cmd = self.commands[self.current_cmd_idx]
             self._decode_command(cmd)
 
-        # 3. Handle TURNING (Spot turns) -> NEW
+        # 3. Handle TURNING — PIVOT ON BACK-LEFT WHEEL
         if self.state == "TURNING":
             turn_step = TURN_SPEED_DEG_S * dt
-            
-            # Check if we are about to overshoot the target
             remaining = self.angle_to_turn - self.angle_traveled
-            
+
             if turn_step >= remaining:
                 # Finish the turn exactly
-                self.theta += remaining * self.turn_direction
+                self._rotate_around_pivot(remaining)
                 self.theta = self.theta % 360
-                
-                # Reset and move to next command
                 self.state = "IDLE"
                 self.current_cmd_idx += 1
                 self.angle_traveled = 0
                 self.angle_to_turn = 0
+                self.path_history.append((self.x, self.y))
             else:
-                # Continue turning
-                self.theta += turn_step * self.turn_direction
+                self._rotate_around_pivot(turn_step)
                 self.angle_traveled += turn_step
-            
-            # Skip linear physics while spot turning
+                self.path_history.append((self.x, self.y))
+
             return None
 
-        # 4. PHYSICS: BICYCLE MODEL
-        # x_dot = v * cos(theta)
-        # y_dot = v * sin(theta)
-        # theta_dot = (v / L) * tan(delta)
-        
+        # 4. PHYSICS: BICYCLE MODEL (same as before for drive commands)
         self.x += self.velocity * math.cos(math.radians(self.theta)) * dt
         self.y += self.velocity * math.sin(math.radians(self.theta)) * dt
-        
+
         if abs(self.steering_angle) > 0.001:
-            # Calculate angular velocity (degrees per second)
             angular_velocity = (self.velocity / ROBOT_WHEELBASE_CM) * math.tan(self.steering_angle)
             self.theta += math.degrees(angular_velocity * dt)
 
-        # Update History
         if abs(self.velocity) > 0:
             self.path_history.append((self.x, self.y))
 
-        # 5. Check Termination (Distance Traveled)
+        # 5. Check Termination
         if self.state == "MOVING":
             self.traveled_val += abs(self.velocity * dt)
             if self.traveled_val >= self.target_val:
                 self._stop_motors()
-        
+
         return None
 
     def _stop_motors(self):
@@ -320,59 +346,41 @@ class Robot:
         global CURRENT_SPEED
         print(f"Processing: {cmd}")
         self.traveled_val = 0
-        
-        # Calculate Steering Angle required for the fixed Turn Radius
-        # tan(delta) = Wheelbase / Radius
-        # delta = atan(Wheelbase / Radius)
-        req_steering_rad = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_CM)
-        
-        # ==========================
+
+        req_steering_left = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_LEFT_CM)
+        req_steering_right = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_RIGHT_CM)
+
         # 1. ARC MOVES (FL, FR, BL, BR)
         if cmd[:2] in ["FR", "FL", "BR", "BL"]:
             try:
-                # === NEW PARSING LOGIC ===
-                # Extract everything after the first 2 letters
                 raw_suffix = cmd[2:]
-                
                 if '_' in raw_suffix:
-                    # Old Format (e.g., "FL090_039") -> Split and take the second part
                     dist_cm = int(raw_suffix.split('_')[1])
                 else:
-                    # New Format (e.g., "FL39") -> The whole suffix is the distance
                     dist_cm = int(raw_suffix)
-                # =========================
 
                 self.target_val = dist_cm
                 self.state = "MOVING"
 
-                # Forward Left: Positive Speed, Positive Steer (Left)
                 if cmd.startswith("FL"):
                     self.velocity = CURRENT_SPEED
-                    self.steering_angle = req_steering_rad 
-
-                # Forward Right: Positive Speed, Negative Steer (Right)
+                    self.steering_angle = req_steering_left
                 elif cmd.startswith("FR"):
                     self.velocity = CURRENT_SPEED
-                    self.steering_angle = -req_steering_rad
-
-                # Backward Left: Negative Speed, Positive Steer (Front wheels point Left)
+                    self.steering_angle = -req_steering_right
                 elif cmd.startswith("BL"):
                     self.velocity = -CURRENT_SPEED
-                    self.steering_angle = req_steering_rad
-
-                # Backward Right: Negative Speed, Negative Steer (Front wheels point Right)
+                    self.steering_angle = req_steering_left
                 elif cmd.startswith("BR"):
                     self.velocity = -CURRENT_SPEED
-                    self.steering_angle = -req_steering_rad
-                    
+                    self.steering_angle = -req_steering_right
+
             except ValueError:
                 print(f"Error parsing command: {cmd}")
                 self.state = "IDLE"; self.current_cmd_idx += 1
             return
 
-        # ==========================
         # 2. STRAIGHT MOVES (FW, BW)
-        # ==========================
         elif cmd.startswith("FW"):
             try: val = int(cmd[2:])
             except: val = 10
@@ -387,41 +395,35 @@ class Robot:
             self.velocity = -CURRENT_SPEED
             self.steering_angle = 0.0
 
-        # ==========================
-        # 3. SPOT TURNS (CW)
-        # ==========================
-        elif cmd.startswith("CW") or cmd.startswith("CCW"):
+        # 3. SPOT TURNS — PIVOT ON BACK-LEFT WHEEL (CW only)
+        elif cmd.startswith("CW"):
             try:
                 deg = int(cmd[2:])
                 self.angle_to_turn = deg
                 self.angle_traveled = 0
-                self.velocity = 0 # Stop linear movement
+                self.velocity = 0
                 self.steering_angle = 0
-                
-                if cmd.startswith("CCW"):
-                    self.turn_direction = 1  # CCW positive
-                else:
-                    self.turn_direction = -1 # CW negative
-                
+                self.turn_direction = -1  # CW
+
+                # Compute and lock the pivot point (back-left wheel)
+                self._compute_pivot_point()
+
                 self.state = "TURNING"
-                print(f"  Spot turn -> {cmd} (Animating)")
+                print(f"  Pivot CW turn -> {deg} deg (back-left wheel fixed)")
             except ValueError:
                 print(f"Error parsing spot turn: {cmd}")
                 self.state = "IDLE"; self.current_cmd_idx += 1
 
-        # ==========================
         # 4. AUX COMMANDS
-        # ==========================
         elif cmd.startswith("SNAP"):
             self.state = "SCANNING"
             self.pause_end_time = time.time() + SCAN_DURATION
-        
+
         elif cmd.startswith("FIN"):
             self.state = "IDLE"; self.current_cmd_idx += 1
         else:
             self.state = "IDLE"; self.current_cmd_idx += 1
 
-    # (Keep draw, draw_fov_cone, draw_path exactly as they were)
     def draw(self, surface):
         px, py = grid_to_pixel(self.x, self.y)
         rotated_surf = pygame.transform.rotate(self.original_surf, self.theta)
@@ -456,6 +458,7 @@ class Robot:
         if len(points) > 1:
             pygame.draw.lines(surface, PURPLE, False, points, 2)
 
+
 # =============================================================================
 # 5. MAIN LOOP
 # =============================================================================
@@ -466,10 +469,9 @@ def main():
     font = pygame.font.SysFont(None, 24)
     timer_font = pygame.font.SysFont(None, 40)
 
-    # NOTE: Set initial position to match your API request (e.g., 1, 1, North)
-    robot = Robot(x=15, y=15, theta=90) 
+    robot = Robot(x=15, y=15, theta=90)
     obstacles = []
-    
+
     start_time = None; elapsed_time = 0.0
 
     running = True
@@ -486,39 +488,35 @@ def main():
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT: running = False
-            
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_s and keys[pygame.K_LCTRL]:
                     save_obstacles_to_json(obstacles, 'obstacles.json')
-                
-                # LOAD JSON WITH TKINTER
+
                 elif event.key == pygame.K_l and keys[pygame.K_LCTRL]:
                     root = tkinter.Tk()
-                    root.withdraw() 
+                    root.withdraw()
                     file_path = filedialog.askopenfilename(title="Select Obstacles JSON", filetypes=[("JSON Files", "*.json")])
                     root.destroy()
                     if file_path:
                         print(f"Loading map from: {file_path}")
-                        robot.reset_all() 
+                        robot.reset_all()
                         obstacles = load_obstacles_from_json(file_path)
 
             if event.type == pygame.MOUSEBUTTONDOWN:
 
-                # ========== SET POSITION BUTTON ==========
                 if setpos_btn.collidepoint(mouse_x, mouse_y):
                     root = tkinter.Tk()
                     root.withdraw()
                     user_input = simpledialog.askstring("Set Position", "Enter X, Y, Direction (e.g. 1.5, 1.5, 90):")
                     root.destroy()
-                    
+
                     if user_input:
                         try:
                             parts = [float(p.strip()) for p in user_input.split(',')]
                             if len(parts) == 3:
                                 new_x, new_y, new_dir = parts
-                                
-                                # LOGIC: If input is integer (1.0), center it (+5).
-                                # If input is decimal (1.2), use exact.
+
                                 if new_x.is_integer() and new_y.is_integer():
                                     robot.x = new_x * 10 + 5
                                     robot.y = new_y * 10 + 5
@@ -527,17 +525,12 @@ def main():
                                     robot.y = new_y * 10
 
                                 robot.theta = new_dir
-                                
-                                # Update START position (for Restart button)
                                 robot.start_x = robot.x
                                 robot.start_y = robot.y
                                 robot.start_theta = robot.theta
-                                
-                                # Clear history
                                 robot.path_history = [(robot.x, robot.y)]
                                 print(f"Robot moved to {robot.x/10}, {robot.y/10}, {robot.theta}")
-                                
-                                # Invalidate cache if position changes manually
+
                                 if robot.has_cached_mission():
                                     robot.commands = []
                                     robot._cached_commands = []
@@ -547,33 +540,30 @@ def main():
                         except ValueError:
                             print("Invalid input")
 
-                # ========== START BUTTON ==========
                 elif start_btn.collidepoint(mouse_x, mouse_y):
                     for ob in obstacles: ob.is_scanned = False
-                    
-                    # 1. Try Cached Mission
+
                     if robot.has_cached_mission():
                         print("Replaying cached mission...")
                         robot.start_from_cache()
                         start_time = time.time()
-                    
-                    # 2. Fetch New Mission
+
                     else:
                         norm_theta = int(round(robot.theta)) % 360
-                        if norm_theta == 90: robot_dir_api = 0    
-                        elif norm_theta == 0: robot_dir_api = 2   
-                        elif norm_theta == 270: robot_dir_api = 4 
+                        if norm_theta == 90: robot_dir_api = 0
+                        elif norm_theta == 0: robot_dir_api = 2
+                        elif norm_theta == 270: robot_dir_api = 4
                         elif norm_theta == 180: robot_dir_api = 6
-                        else: robot_dir_api = 0 
+                        else: robot_dir_api = 0
 
-                        payload = { 
-                            "obstacles": [], 
-                            "retrying": False, 
-                            "robot_x": int(robot.x/10), 
-                            "robot_y": int(robot.y/10), 
-                            "robot_dir": robot_dir_api 
+                        payload = {
+                            "obstacles": [],
+                            "retrying": False,
+                            "robot_x": int(robot.x/10),
+                            "robot_y": int(robot.y/10),
+                            "robot_dir": robot_dir_api
                         }
-                        
+
                         for ob in obstacles:
                             d_api = 0
                             if ob.direction == 0: d_api = 0
@@ -590,18 +580,16 @@ def main():
                                 if data.get('error'): print(f"Error: {data['error']}")
                                 else:
                                     robot.start_mission(data['data'])
-                                    start_time = time.time() 
+                                    start_time = time.time()
                             else: print(f"Status {r.status_code}")
                         except Exception as e: print(f"Failed: {e}")
-                
-                # ========== RESTART BUTTON ==========
+
                 elif restart_btn.collidepoint(mouse_x, mouse_y):
                     robot.reset_position()
                     start_time = None; elapsed_time = 0.0
                     for ob in obstacles: ob.is_scanned = False
                     print("Restarted at current mission start.")
 
-                # ========== RESET BUTTON ==========
                 elif reset_btn.collidepoint(mouse_x, mouse_y):
                     robot.reset_all(); obstacles.clear(); Obstacle._id_counter = 1
                     start_time = None; elapsed_time = 0.0
@@ -615,20 +603,17 @@ def main():
                         elif event.button == 3: obstacles.remove(existing)
                     else:
                         if event.button == 1: obstacles.append(Obstacle(c, r))
-                    
-                    if robot.has_cached_mission():
-                        robot.reset_all() # Clear cache if obstacles change
 
-                # ========== MANUAL CMD BUTTON ==========
+                    if robot.has_cached_mission():
+                        robot.reset_all()
+
                 elif manual_btn.collidepoint(mouse_x, mouse_y):
                     root = tkinter.Tk()
                     root.withdraw()
-                    # Ask user for input (e.g., "FW20" or "FL39")
                     cmd_input = simpledialog.askstring("Manual Command", "Enter Command (e.g. FW20, FL39, SNAP1_C):")
                     root.destroy()
 
                     if cmd_input:
-                        # Clean up input: Uppercase and remove spaces
                         clean_cmd = cmd_input.strip().upper().replace(" ", "")
                         robot.execute_manual_command(clean_cmd)
 
@@ -660,7 +645,6 @@ def main():
         screen.blit(timer_font.render(f"{elapsed_time:.2f}s", True, RED), (ARENA_WIDTH + 40, 20))
         screen.blit(font.render("Group 24 SIMULATOR 2", True, BLUE), (ARENA_WIDTH + 10, 80))
 
-        # Cache Status
         if robot.has_cached_mission():
             screen.blit(font.render("Mission CACHED", True, (0, 128, 0)), (ARENA_WIDTH + 20, 240))
         else:
@@ -676,7 +660,7 @@ def main():
         pygame.draw.rect(screen, BLACK, start_btn, 2)
         start_label = "GO (cached)" if robot.has_cached_mission() else "START"
         screen.blit(font.render(start_label, True, BLACK), (ARENA_WIDTH + 40, 460))
-        
+
         pygame.draw.rect(screen, YELLOW, restart_btn)
         pygame.draw.rect(screen, BLACK, restart_btn, 2)
         screen.blit(font.render("RESTART", True, BLACK), (ARENA_WIDTH + 45, 510))
@@ -685,7 +669,6 @@ def main():
         pygame.draw.rect(screen, BLACK, reset_btn, 2)
         screen.blit(font.render("RESET", True, WHITE), (ARENA_WIDTH + 55, 560))
 
-        # Draw Manual Button
         pygame.draw.rect(screen, PURPLE, manual_btn)
         pygame.draw.rect(screen, BLACK, manual_btn, 2)
         screen.blit(font.render("MANUAL CMD", True, WHITE), (ARENA_WIDTH + 30, 610))
