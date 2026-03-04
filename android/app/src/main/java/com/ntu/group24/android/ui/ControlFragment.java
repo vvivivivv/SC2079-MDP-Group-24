@@ -52,6 +52,15 @@ public class ControlFragment extends Fragment {
         EditText etX = view.findViewById(R.id.etRobotX);
         EditText etY = view.findViewById(R.id.etRobotY);
         Button btnSet = view.findViewById(R.id.btnSetRobot);
+        Button btnSyncObstacles = view.findViewById(R.id.btnSyncObstacles);
+
+        btnSyncObstacles.setOnClickListener(v -> {
+            // Ask MapFragment to send the full obstacle list now
+            Intent syncIntent = new Intent(Constants.INTENT_OBSTACLE_SYNC_REQUEST);
+            LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(syncIntent);
+
+            Toast.makeText(getContext(), "Syncing obstacles...", Toast.LENGTH_SHORT).show();
+        });
 
         // Movement controls (C.3)
         btnForward.setOnClickListener(v -> moveRobot("FORWARD"));
@@ -148,5 +157,6 @@ public class ControlFragment extends Fragment {
 
         Toast.makeText(requireContext(), "Sent: " + cmd, Toast.LENGTH_SHORT).show();
     }
+
     
 }

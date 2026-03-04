@@ -53,6 +53,7 @@
     <string name="task2">Task 2</string>
     <string name="start_computation">Start Computation</string>
     <string name="reset">Reset</string>
+    <string name="sync">Sync Obstacles</string>
 
     <!-- Timer -->
     <string name="timer">00:00.000</string>

@@ -48,12 +48,12 @@ public class Constants {
 
     // Early algo computation
     public static final String START_COMPUTATION = "CALC";
-    public static final String COMP_DONE = "COMPLETED";
+    public static final String COMP_DONE = "STATUS,Algo Completed";
 
     // Timer broadcasts
     public static final String INTENT_TIMER_UPDATE = "INTENT_TIMER_UPDATE";
     public static final String EXTRA_TIMER_RUNNING = "timer_running";
     public static final String EXTRA_TIMER_ELAPSED_MS = "timer_elapsed_ms";
     public static final String INTENT_END_DETECTED = "INTENT_END_DETECTED";
-
+    public static final String INTENT_OBSTACLE_SYNC_REQUEST = "INTENT_OBSTACLE_SYNC_REQUEST";
 }
