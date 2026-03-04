@@ -29,23 +29,26 @@ from helper import is_valid
 # We measure from the IMAGE FACE to the camera (robot front center).
 # Robot center is ~15cm behind camera, so robot-center-to-face = dist + 15.
 # In grid coords, obstacle center to robot center = (dist + 5) / 10 grid units.
+#   dist=20cm => robot center is 25cm from face => 30cm from obs center => 3.0 grid
 #   dist=25cm => robot center is 30cm from face => 35cm from obs center => 3.5 grid
 #   dist=35cm => robot center is 40cm from face => 45cm from obs center => 4.5 grid
-FACE_DISTANCES_CM = [25, 35]
+FACE_DISTANCES_CM = [20, 25, 35]
 
 # Approach angle offsets from the face normal (degrees).
-# 0° = dead center, ±30° = angled approaches.
-# All within the 45° max incidence angle.
-APPROACH_ANGLES_DEG = [-30, 0, 30]
+# 0° = dead center, ±30° = angled, ±45° = max incidence angle.
+# Wider angles give more room when obstacle faces a nearby wall.
+APPROACH_ANGLES_DEG = [-45, -30, 0, 30, 45]
 
 # Safety: virtual obstacle radius (slide 36: 40x40cm => 20cm from center)
 # We check robot center is at least this far from ALL obstacle centers.
-VIRTUAL_OBS_HALF_CM = 21.0  # cm (matches CAPTURE_CLEARANCE in hybrid_astar.py)
+VIRTUAL_OBS_HALF_CM = 21.0  # cm (min distance from own obstacle center)
 
 # Penalty weights for TSP cost (lower = preferred)
 PENALTY_CENTER = 0       # dead-center shot
 PENALTY_ANGLED = 2       # 30° off-center (still very readable)
+PENALTY_WIDE_ANGLE = 4   # 45° off-center (max incidence, still works)
 PENALTY_FAR = 3           # further distance
+PENALTY_CLOSE = 1         # 20cm (at minimum spec distance, slight risk)
 
 
 class CellState:
@@ -207,10 +210,14 @@ class Obstacle(CellState):
                 
                 # 7. Penalty: center is best, angled slightly worse, far slightly worse
                 penalty = 0
-                if abs(angle_off) > 5:
+                if abs(angle_off) > 35:
+                    penalty += PENALTY_WIDE_ANGLE
+                elif abs(angle_off) > 5:
                     penalty += PENALTY_ANGLED
                 if face_dist > 30:
                     penalty += PENALTY_FAR
+                elif face_dist < 22:
+                    penalty += PENALTY_CLOSE
                 
                 cell = CellState(
                     robot_gx, robot_gy, cardinal,
@@ -222,7 +229,7 @@ class Obstacle(CellState):
         cells.sort(key=lambda c: c.penalty)
         
         # Limit to best candidates to keep TSP tractable
-        MAX_CANDIDATES = 8
+        MAX_CANDIDATES = 10
         if len(cells) > MAX_CANDIDATES:
             cells = cells[:MAX_CANDIDATES]
         

@@ -30,6 +30,7 @@ ARCHITECTURE (optimized for physical speed):
 """
 
 import math
+import math
 import time
 from typing import List, Tuple
 import numpy as np
@@ -51,10 +52,26 @@ from reeds_shepp import (
     get_optimal_path_length, get_optimal_path_segments,
     sample_path
 )
+# Max heading error (degrees) at which we skip CW spin entirely.
+# Camera HFOV = 62.2 deg => face visible up to ~31 deg off-center.
+# Being conservative: skip spin if error < 25 deg. This avoids
+# converting tiny CCW errors into massive CW rotations (5 deg CCW
+# would become 355 deg CW = 3.5cm drift for no benefit).
+SPIN_SKIP_THRESHOLD_DEG = 25.0
+
 from hybrid_astar import (
     hybrid_astar_search, path_to_commands, build_obstacle_list,
     TURN_RADIUS_CM, OBSTACLE_RADIUS_CM
 )
+
+
+# =============================================================================
+# THETA NORMALIZATION
+# =============================================================================
+
+def _norm_theta(t):
+    """Normalize angle to [-pi, pi]."""
+    return (t + math.pi) % (2 * math.pi) - math.pi
 
 
 # =============================================================================
@@ -247,16 +264,46 @@ class MazeSolver:
     # =================================================================
 
     def _rs_travel_cost(self, pose_a, pose_b):
-        """Reeds-Shepp path length between two full poses.
+        """Reeds-Shepp path length + estimated spin cost.
         
-        This gives the TSP the REAL driving cost:
-        - RS path length (accounts for heading changes during transit)
-        - Stop/start penalty for the SNAP pause at destination
+        RS path length gives the transit cost. We add an estimated
+        spin penalty because when A* is used (RS blocked), the robot
+        may arrive at a heading that differs from pose_b's heading.
         
-        Much more accurate than Euclidean for car-like robots.
+        The penalty is based on how "natural" the approach direction
+        is: if the straight-line approach from A to B already points
+        near B's heading, A* will arrive close to the right heading
+        and need minimal spinning. If not, large CW spins may occur.
         """
         rs_len = get_optimal_path_length(pose_a, pose_b, ROBOT_TURN_RADIUS_MAX_CM)
-        return rs_len + STOP_START_PENALTY_CM
+        
+        # Estimate spin cost: what heading would a straight-line
+        # approach from A to B produce?
+        dx = pose_b[0] - pose_a[0]
+        dy = pose_b[1] - pose_a[1]
+        if abs(dx) + abs(dy) < 1.0:
+            natural_heading = pose_a[2]
+        else:
+            natural_heading = math.atan2(dy, dx)
+        
+        # How far is the natural approach heading from the desired heading?
+        target_heading = pose_b[2]
+        h_err = abs(((natural_heading - target_heading) + math.pi) % (2 * math.pi) - math.pi)
+        h_err_deg = math.degrees(h_err)
+        
+        # Spin penalty (in cm equivalent):
+        # - Within SPIN_SKIP_THRESHOLD: free (we skip the spin)
+        # - Small CW spin (<90 deg): moderate cost
+        # - Large CW spin (>180 deg, i.e. small CCW forced CW): expensive
+        if h_err_deg <= SPIN_SKIP_THRESHOLD_DEG:
+            spin_cost = 0
+        elif h_err_deg <= 90:
+            spin_cost = h_err_deg * 0.3  # ~27cm max
+        else:
+            # Forces a near-full CW rotation = big drift risk
+            spin_cost = h_err_deg * 0.6  # up to ~108cm penalty
+        
+        return rs_len + STOP_START_PENALTY_CM + spin_cost
 
     # =================================================================
     # VISIT ORDER (TSP)
@@ -413,7 +460,7 @@ class MazeSolver:
             wp_from = waypoint_path[i]
             wp_to = waypoint_path[i + 1]
 
-            start_pose = current_pose
+            start_pose = (current_pose[0], current_pose[1], _norm_theta(current_pose[2]))
             goal_pose = self._state_to_pose(wp_to)
 
             # Obstacle indices for radius relaxation
@@ -426,9 +473,28 @@ class MazeSolver:
 
             leg_commands = []
             leg_ok = False
+            goal_xy = (goal_pose[0], goal_pose[1], goal_pose[2])
+
+            # Find ALL obstacles whose virtual zone overlaps the start or
+            # goal position. After a large CW pivot spin, the robot center
+            # can drift into a nearby obstacle's zone — we must relax those
+            # radii so A* can still find a path out.
+            nearby_start = set()
+            nearby_goal = set()
+            for oi, (oox, ooy, oor) in enumerate(obs_expanded):
+                ds = math.sqrt((start_pose[0]-oox)**2 + (start_pose[1]-ooy)**2)
+                dg = math.sqrt((goal_pose[0]-oox)**2 + (goal_pose[1]-ooy)**2)
+                if ds < oor + 2:
+                    nearby_start.add(oi)
+                if dg < oor + 2:
+                    nearby_goal.add(oi)
+            if start_ob_idx is not None:
+                nearby_start.add(start_ob_idx)
+            if goal_ob_idx is not None:
+                nearby_goal.add(goal_ob_idx)
+            skip_indices = nearby_start | nearby_goal
 
             # --- ATTEMPT 1: Direct Reeds-Shepp path ---
-            # Use MAX radius (conservative — guaranteed to fit through gaps)
             is_clear, segments, rs_len = check_rs_path_collision(
                 start_pose, goal_pose, ROBOT_TURN_RADIUS_MAX_CM,
                 obs_expanded,
@@ -437,55 +503,54 @@ class MazeSolver:
 
             if is_clear and segments:
                 leg_commands = rs_segments_to_commands(segments)
-                current_pose = (goal_pose[0], goal_pose[1], goal_pose[2])
+                current_pose = (goal_pose[0], goal_pose[1], _norm_theta(goal_pose[2]))
                 leg_ok = True
                 print(f"  Leg {i}: RS direct, {rs_len:.0f}cm, "
                       f"{len(segments)} segments")
 
-            # --- ATTEMPT 2: Hybrid A* heading-constrained ---
+            # --- ATTEMPT 2: A* heading-constrained (Euclidean+heading heuristic) ---
             if not leg_ok:
                 path, iters = hybrid_astar_search(
-                    start_pose, goal_pose, obs_expanded,
+                    start_pose, goal_xy, obs_expanded,
+                    goal_tolerance_cm=8.0,
+                    heading_tolerance_rad=0.35,  # ~20 deg (within spin-skip threshold)
                     position_only=False,
-                    start_obstacle_idx=start_ob_idx,
-                    goal_obstacle_idx=goal_ob_idx)
+                    skip_obstacle_indices=skip_indices)
 
                 if path:
                     leg_commands = path_to_commands(path)
                     end = path[-1]
-                    current_pose = (end[0], end[1], end[2])
+                    current_pose = (end[0], end[1], _norm_theta(end[2]))
                     leg_ok = True
-                    print(f"  Leg {i}: A* heading-aware, {iters} iters, "
-                          f"{len(path)} steps")
+                    print(f"  Leg {i}: A* heading, {iters} iters, {len(path)} steps")
 
-            # --- ATTEMPT 3: Hybrid A* position-only ---
+            # --- ATTEMPT 3: A* position-only ---
             if not leg_ok:
                 path, iters = hybrid_astar_search(
-                    start_pose, goal_pose, obs_expanded,
+                    start_pose, goal_xy, obs_expanded,
+                    goal_tolerance_cm=5.0,
                     position_only=True,
-                    start_obstacle_idx=start_ob_idx,
-                    goal_obstacle_idx=goal_ob_idx)
+                    skip_obstacle_indices=skip_indices)
 
                 if path:
                     leg_commands = path_to_commands(path)
                     end = path[-1]
-                    current_pose = (end[0], end[1], end[2])
+                    current_pose = (end[0], end[1], _norm_theta(end[2]))
                     leg_ok = True
-                    print(f"  Leg {i}: A* position-only, {iters} iters")
+                    print(f"  Leg {i}: A* pos-only, {iters} iters, {len(path)} steps")
 
-            # --- ATTEMPT 4: Relaxed tolerance ---
+            # --- ATTEMPT 4: A* relaxed tolerance ---
             if not leg_ok:
                 path, iters = hybrid_astar_search(
-                    start_pose, goal_pose, obs_expanded,
-                    goal_tolerance_cm=12.0,
+                    start_pose, goal_xy, obs_expanded,
+                    goal_tolerance_cm=15.0,
                     position_only=True,
-                    start_obstacle_idx=start_ob_idx,
-                    goal_obstacle_idx=goal_ob_idx)
+                    skip_obstacle_indices=skip_indices)
 
                 if path:
                     leg_commands = path_to_commands(path)
                     end = path[-1]
-                    current_pose = (end[0], end[1], end[2])
+                    current_pose = (end[0], end[1], _norm_theta(end[2]))
                     leg_ok = True
                     print(f"  Leg {i}: A* relaxed, {iters} iters")
 
@@ -507,12 +572,64 @@ class MazeSolver:
                 face_y = ob['y'] * 10 + 5 + fy
 
                 rx, ry, rtheta = current_pose
-                spin_deg, new_rx, new_ry, new_theta = compute_aim_spin_full(
-                    rx, ry, rtheta, face_x, face_y)
+                rtheta = _norm_theta(rtheta)
+
+                # Compute the SIGNED heading error to the face.
+                # If it's small enough, the face is in the camera FOV
+                # and we can skip the spin entirely (avoiding drift).
+                angle_to_face = math.atan2(face_y - ry, face_x - rx)
+                signed_err = angle_to_face - rtheta
+                signed_err = (signed_err + math.pi) % (2 * math.pi) - math.pi
+                signed_err_deg = math.degrees(signed_err)
+
+                if abs(signed_err_deg) <= SPIN_SKIP_THRESHOLD_DEG:
+                    # Face is within camera FOV — no spin needed
+                    spin_deg = 0
+                    new_rx, new_ry, new_theta = rx, ry, rtheta
+                else:
+                    spin_deg, new_rx, new_ry, new_theta = compute_aim_spin_full(
+                        rx, ry, rtheta, face_x, face_y)
 
                 if spin_deg > 0.5:
+                    # PRE-CHECK: will the spin push us into an obstacle?
+                    # If so, drive forward/backward a bit to create clearance.
+                    spin_ok = True
+                    for oox, ooy, oor in obs_expanded:
+                        d = math.sqrt((new_rx-oox)**2 + (new_ry-ooy)**2)
+                        if d < oor:
+                            spin_ok = False
+                            break
+
+                    if not spin_ok:
+                        # Try small forward nudge (10cm) to escape
+                        for nudge_dist, nudge_cmd in [(10, "FW10"), (-10, "BW10")]:
+                            test_x = rx + nudge_dist * math.cos(rtheta)
+                            test_y = ry + nudge_dist * math.sin(rtheta)
+                            # Check nudge destination is valid
+                            nudge_valid = (15 <= test_x <= 185 and 15 <= test_y <= 185)
+                            if nudge_valid:
+                                for oox, ooy, oor in obs_expanded:
+                                    if math.sqrt((test_x-oox)**2+(test_y-ooy)**2) < 22:
+                                        nudge_valid = False
+                                        break
+                            if nudge_valid:
+                                # Re-compute spin from nudged position
+                                s2, nx2, ny2, nt2 = compute_aim_spin_full(
+                                    test_x, test_y, rtheta, face_x, face_y)
+                                # Check post-spin collision
+                                nudge_spin_ok = True
+                                for oox, ooy, oor in obs_expanded:
+                                    if math.sqrt((nx2-oox)**2+(ny2-ooy)**2) < oor:
+                                        nudge_spin_ok = False
+                                        break
+                                if nudge_spin_ok:
+                                    commands.append(nudge_cmd)
+                                    spin_deg, new_rx, new_ry, new_theta = s2, nx2, ny2, nt2
+                                    print(f"    Nudge {nudge_cmd} to avoid spin collision")
+                                    break
+
                     commands.append(f"CW{int(round(spin_deg))}")
-                    current_pose = (new_rx, new_ry, new_theta)
+                    current_pose = (new_rx, new_ry, _norm_theta(new_theta))
 
                 # --- SNAP ---
                 commands.append(f"SNAP{wp_to.screenshot_id}")

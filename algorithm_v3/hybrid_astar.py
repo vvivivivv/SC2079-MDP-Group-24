@@ -22,6 +22,7 @@ from consts import (
     ROBOT_TURN_RADIUS_CM, 
     ROBOT_SPEED_CM_S, 
     ROBOT_AXLE_TRACK_CM, 
+    ROBOT_WHEELBASE_CM,
     ROBOT_RADIUS_CM
 )
 
@@ -117,43 +118,50 @@ def _check_arc_collision(x0, y0, theta0, arc_angle, turn_radius, direction, obst
     return False
 
 
+
 # =============================================================================
-# PRECOMPUTED EULER DELTAS — matches simulator's differential drive exactly
+# PRECOMPUTED EULER DELTAS — matches simulator's BICYCLE MODEL exactly
 # =============================================================================
-# The simulator uses Euler integration at 60fps with differential wheel speeds.
-# To ensure the planned path matches executed commands, we precompute the
-# (dx, dy, dtheta) for each primitive using the same integration.
+# The simulator uses Ackermann (bicycle model) kinematics at 60fps:
+#   x_dot     = v * cos(theta)
+#   y_dot     = v * sin(theta)
+#   theta_dot = (v / L) * tan(delta)
 #
-# NEW: Added BL (backward-left) and BR (backward-right) primitives for
-# Reeds-Shepp style paths that freely reverse along arcs.
+# where L = wheelbase, delta = steering angle, v = velocity.
+# At full lock: delta = atan(L / R), so tan(delta) = L/R, omega = v/R.
+#
+# 6 motion primitives: S, L, R (forward) + B, BL, BR (reverse)
 
 def _precompute_euler_deltas():
-    """Precompute movement deltas at heading=0 (EAST) using simulator's Euler integration."""
+    """Precompute movement deltas at heading=0 (EAST) using simulator's bicycle model."""
     R = ROBOT_TURN_RADIUS_CM
-    axle = ROBOT_AXLE_TRACK_CM
-    half = axle / 2.0
+    L = ROBOT_WHEELBASE_CM         # wheelbase (front-to-rear axle distance)
     speed = ROBOT_SPEED_CM_S
-    dt = 1.0 / 60.0  # FPS from simulator
+    dt = 1.0 / 60.0               # FPS from simulator
     step = STEP_SIZE_CM
+
+    # Full-lock steering angle: delta = atan(L / R)
+    delta_max = math.atan(L / R)
 
     deltas = {}
 
-    # Define all 6 motion primitives with their wheel velocities
+    # Define all 6 motion primitives: (name, velocity, steering_angle)
     primitives = [
-        # (name, left_wheel_speed, right_wheel_speed)
-        ('S',  speed,                          speed),                          # Straight forward
-        ('L',  speed * (R - half) / R,         speed * (R + half) / R),         # Forward left arc
-        ('R',  speed * (R + half) / R,         speed * (R - half) / R),         # Forward right arc
-        ('B',  -speed,                         -speed),                         # Straight backward
-        ('BL', -speed * (R - half) / R,        -speed * (R + half) / R),        # Backward left arc
-        ('BR', -speed * (R + half) / R,        -speed * (R - half) / R),        # Backward right arc
+        ('S',   speed,  0.0),             # Straight forward
+        ('L',   speed,  delta_max),       # Forward left arc (full lock left)
+        ('R',   speed, -delta_max),       # Forward right arc (full lock right)
+        ('B',  -speed,  0.0),             # Straight backward
+        ('BL', -speed,  delta_max),       # Backward left arc (front wheels point left)
+        ('BR', -speed, -delta_max),       # Backward right arc (front wheels point right)
     ]
 
-    for name, vl, vr in primitives:
-        v = (vl + vr) / 2
-        omega = (vr - vl) / axle
+    for name, v, delta in primitives:
         x, y, t = 0.0, 0.0, 0.0
         traveled = 0.0
+        
+        # Angular velocity from bicycle model: omega = (v / L) * tan(delta)
+        omega = (v / L) * math.tan(delta) if abs(delta) > 1e-9 else 0.0
+        
         while traveled < step:
             x += v * math.cos(t) * dt
             y += v * math.sin(t) * dt
@@ -162,6 +170,7 @@ def _precompute_euler_deltas():
         deltas[name] = (x, y, t)
 
     return deltas
+
 
 _EULER_DELTAS = _precompute_euler_deltas()
 
@@ -251,7 +260,13 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     goal_tol_rad = math.radians(goal_tolerance_deg)
 
     # Build modified obstacle list: reduce radius for start/goal obstacles
-    CAPTURE_CLEARANCE = 27.0
+    # Min robot-to-obstacle-center distance across all candidates:
+    #   20cm face dist, 45° angle → 23.8cm from center
+    #   20cm face dist, 0° angle  → 25.0cm from center  
+    #   25cm face dist, 0° angle  → 30.0cm from center
+    # Robot clearance check: at 22cm center-to-center, head-on:
+    #   robot edge = 22 - 15 = 7cm from center, obstacle edge = 5cm → 2cm gap (safe)
+    CAPTURE_CLEARANCE = 22.0
     obs_for_search = []
     for i, (ox, oy, orad) in enumerate(obstacles_expanded):
         if i == start_obstacle_idx or i == goal_obstacle_idx:
@@ -328,8 +343,6 @@ def path_to_commands(path):
     if not path or len(path) < 2:
         return []
 
-    step_angle_deg = round(math.degrees(STEP_SIZE_CM / TURN_RADIUS_CM))
-    step_arc_len = STEP_SIZE_CM
 
     # Group consecutive same-type moves
     segments = []
@@ -353,19 +366,19 @@ def path_to_commands(path):
             commands.append(f"BW{dist}")
 
         elif move_type == 'L':
-            total_arc = round(step_arc_len * count)
+            total_arc = round(STEP_SIZE_CM * count)
             commands.append(f"FL{total_arc}")
 
         elif move_type == 'R':
-            total_arc = round(step_arc_len * count)
+            total_arc = round(STEP_SIZE_CM * count)
             commands.append(f"FR{total_arc}")
 
         elif move_type == 'BL':
-            total_arc = round(step_arc_len * count)
+            total_arc = round(STEP_SIZE_CM * count)
             commands.append(f"BL{total_arc}")
 
         elif move_type == 'BR':
-            total_arc = round(step_arc_len * count)
+            total_arc = round(STEP_SIZE_CM * count)
             commands.append(f"BR{total_arc}")
 
     return commands

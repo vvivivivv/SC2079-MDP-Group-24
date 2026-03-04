@@ -206,8 +206,28 @@ def _h_reeds_shepp(x, y, theta, gx, gy, gtheta):
         (x, y, theta), (gx, gy, gtheta), TURN_RADIUS_HEURISTIC_CM)
 
 def _h_euclidean(x, y, gx, gy):
-    """Euclidean fallback for position-only mode."""
+    """Euclidean heuristic (position only)."""
     return math.sqrt((x - gx)**2 + (y - gy)**2)
+
+
+def _h_euclidean_with_heading(x, y, theta, gx, gy, gtheta):
+    """Euclidean + lightweight heading penalty.
+    
+    Adds a fraction of the heading mismatch as extra cost.
+    This biases A* toward paths arriving near the goal heading
+    WITHOUT the 200us/call cost of full RS heuristic.
+    
+    The heading penalty is scaled by TURN_RADIUS so it's in cm
+    (matching the distance heuristic units). This keeps it admissible
+    when the weight is <= 1.0 (a heading change of X radians needs
+    at least X * turn_radius cm of arc).
+    """
+    dist = math.sqrt((x - gx)**2 + (y - gy)**2)
+    hdiff = abs((theta - gtheta + math.pi) % (2 * math.pi) - math.pi)
+    # Weight: 0.5 * turn_radius * heading_diff is admissible
+    # (real arc cost = turn_radius * heading_diff, so 0.5x is safe)
+    heading_cost = 0.5 * TURN_RADIUS_CM * hdiff
+    return dist + heading_cost
 
 
 # =============================================================================
@@ -216,10 +236,11 @@ def _h_euclidean(x, y, gx, gy):
 
 def hybrid_astar_search(start, goal, obstacles_expanded,
                         goal_tolerance_cm=5.0,
-                        heading_tolerance_rad=0.35,  # ~20 degrees
+                        heading_tolerance_rad=0.35,
                         position_only=False,
                         start_obstacle_idx=None,
-                        goal_obstacle_idx=None):
+                        goal_obstacle_idx=None,
+                        skip_obstacle_indices=None):
     """Find path from start pose to goal pose.
     
     PRIMARY MODE (position_only=False):
@@ -249,11 +270,19 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     gx, gy = goal[0], goal[1]
     gt = goal[2] if len(goal) > 2 and not position_only else st
 
-    # Reduce radius for start/goal obstacles
+    # Reduce radius for nearby obstacles (start, goal, or post-spin drift)
     CAPTURE_CLEARANCE = 22.0
+    skip_set = set()
+    if skip_obstacle_indices:
+        skip_set = set(skip_obstacle_indices)
+    if start_obstacle_idx is not None:
+        skip_set.add(start_obstacle_idx)
+    if goal_obstacle_idx is not None:
+        skip_set.add(goal_obstacle_idx)
+
     obs_for_search = []
     for i, (ox, oy, orad) in enumerate(obstacles_expanded):
-        if i == start_obstacle_idx or i == goal_obstacle_idx:
+        if i in skip_set:
             obs_for_search.append((ox, oy, CAPTURE_CLEARANCE))
         else:
             obs_for_search.append((ox, oy, orad))
@@ -266,10 +295,11 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     sk = _grid_key(sx, sy, st)
     g_cost[sk] = 0
 
-    if position_only:
-        h_start = _h_euclidean(sx, sy, gx, gy)
+    # Use heading-aware Euclidean when goal heading is known (cheap but effective)
+    if not position_only:
+        h_start = _h_euclidean_with_heading(sx, sy, st, gx, gy, gt)
     else:
-        h_start = _h_reeds_shepp(sx, sy, st, gx, gy, gt)
+        h_start = _h_euclidean(sx, sy, gx, gy)
 
     heapq.heappush(open_set, (h_start, counter, sx, sy, st, None))
 
@@ -280,10 +310,10 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
         ck = _grid_key(cx, cy, ct)
 
         cur_g = g_cost.get(ck, float('inf'))
-        if position_only:
-            h_cur = _h_euclidean(cx, cy, gx, gy)
+        if not position_only:
+            h_cur = _h_euclidean_with_heading(cx, cy, ct, gx, gy, gt)
         else:
-            h_cur = _h_reeds_shepp(cx, cy, ct, gx, gy, gt)
+            h_cur = _h_euclidean(cx, cy, gx, gy)
 
         if cur_g < f - h_cur - 1e-6:
             continue
@@ -315,10 +345,10 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
                 g_cost[nk] = new_g
                 parent[nk] = (ck, move, cx, cy, ct)
                 counter += 1
-                if position_only:
-                    h = _h_euclidean(nx, ny, gx, gy)
+                if not position_only:
+                    h = _h_euclidean_with_heading(nx, ny, nt, gx, gy, gt)
                 else:
-                    h = _h_reeds_shepp(nx, ny, nt, gx, gy, gt)
+                    h = _h_euclidean(nx, ny, gx, gy)
                 heapq.heappush(open_set, (new_g + h, counter, nx, ny, nt, move))
 
     return None, iterations
