@@ -73,6 +73,8 @@ void Error_Handler(void);
 #define Left_IR_GPIO_Port GPIOC
 #define Right_IR_Pin GPIO_PIN_9
 #define Right_IR_GPIO_Port GPIOC
+#define Buzz_Pin_Pin GPIO_PIN_8
+#define Buzz_Pin_GPIO_Port GPIOA
 /* USER CODE BEGIN Private defines */
 
 #define LED3_Pin GPIO_PIN_10

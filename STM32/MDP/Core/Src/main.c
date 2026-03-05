@@ -77,8 +77,6 @@ const osThreadAttr_t readICMTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
-
-
 /* USER CODE BEGIN PV */
 
 // Multitasking threads TODO: untested
@@ -124,15 +122,27 @@ volatile float gyro_z_dps = 0.0f;
 // Servo constants
 const int SERVO_STRAIGHT = 172;
 const int SERVO_LEFT_MAX = 95; //100
-const int SERVO_LEFT = 120;
-const int SERVO_RIGHT = 240;
-const int SERVO_RIGHT_MAX = 249; // PROBABLY CAN GO HIGHER, BUT NOT TESTED
+const int SERVO_LEFT = 125; // 130 changed to 115 test again tmr // 135 == 265 in terms of diameter (~50cm inner circle), BUT 125 == 265 for circumference??? ????
+const int SERVO_RIGHT = 265;
+const int SERVO_RIGHT_MAX = 265; // PROBABLY CAN GO HIGHER, BUT NOT TESTED
 
 // variables for communication with pi via UART
 #define MAX_BUF_SIZE 20
 volatile uint8_t command_buf[MAX_BUF_SIZE];
 volatile char uart_input;
 volatile int command_len = 0;
+/* USER CODE BEGIN PV */
+// ... 原有代�? ...
+
+// 1. PID 目标值和状�?
+const int TARGET_TICK = 180;     // 50ms内期望脉冲数（根�?�需�?调整）
+const float Kp_speed = 15.0f;    // 速度环 Kp
+const float Kp_straight = 12.0f; // 左�?��?�步 Kp
+
+// 2. 外部调用的 PWM 最终输出值
+volatile int pwm_outA = 0;
+volatile int pwm_outB = 0;
+/* USER CODE END PV */
 
 //UART Buffer
 uint8_t rxBuffer[120];
@@ -150,6 +160,7 @@ volatile uint8_t display_buf2[20];
 volatile uint8_t display_buf3[20];
 volatile int ready_execute = 1; // set to 0 when executing a command, so future commands are queued.
 volatile int ready_parse = 0;
+volatile int approaching_flag = 0; // for when the dist to go is less than 15, set this flag. the encoder then modifies target speed into half.
 
 // used as shared variables for move and turn args
 volatile int move_flag = 0;
@@ -158,20 +169,23 @@ volatile int turn_flag = -1;
 volatile int turned_angle = 0; //track how many degrees the car has turned
 volatile int target_angle = 0;
 volatile int straighten_flag = 0; // bad implementation imo, but it tells the move_thread whether to use the gyro to adjust itself to go straight.
+volatile int turn_in_place_flag = 0; // set when doing turn in place so that the encoder pid thread can alter the speed
 
 const int SPEED_MAX = 7190;
 const int SPEED_HIGH = 6000;
 const int SPEED_NORM = 3000;
 const int SPEED_SLOW = 1500;
 const int SPEED_VERY_SLOW = 700;
+const int SPEED_MIN = 600;
 
 volatile int speedA = SPEED_NORM; // the pwm wave, 7199 is max i think
 volatile int speedB = SPEED_NORM;
-volatile float speedA_adjust = 0; // feedforward control cuz its easier than pid
-volatile float speedB_adjust = 0;
+volatile int speedA_target = 0; // the target speed to be achieved by the pid (represented in a pvm format :))
+volatile int speedB_target = 0;
 
 // used for encoders
 //const float ENCODER_COUNTS_PER_REVOLUTION = 1540.0f;
+//const float ENCODER_COUNTS_PER_REVOLUTION = 680.0f;
 const float ENCODER_COUNTS_PER_REVOLUTION = 770.0f;
 const float WHEEL_CIRCUMFERENCE_CM = 6.5f*3.14f;
 volatile int rotations = 0;
@@ -188,6 +202,11 @@ const static float Kd_match = 3e3;
 
 static int16_t pwmValAccel = 0, pwmValTarget = 0,
 	lPwmVal = 0, rPwmVal = 0;
+
+
+// trying to mitigate overshooting encoder by calibrating an offset...
+float forward_error = 0;
+float backward_error = 0;
 
 /* USER CODE END PV */
 
@@ -275,22 +294,248 @@ void stop(){
 
 
 void move(int direction){
-	//int pwmVal = motor_speed;
-	if (direction == 1){
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
+    if (direction == 1){ // �?进
+        __HAL_TIM_SetCompare(&htim4, TIM_CHANNEL_4, 0);
+        __HAL_TIM_SetCompare(&htim4, TIM_CHANNEL_3, pwm_outA); // 使用 PID �?�的值
 
-		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
-		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_1, speedB); // PWM to Motor B (IN2)
-	}
-	else if (direction == 2){
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, speedA);
-		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0); // PWM to Motor A (IN1)
+        __HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_2, 0);
+        __HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, pwm_outB); // 使用 PID �?�的值
+    }
+    else if (direction == 2){ // �?�退
+        __HAL_TIM_SetCompare(&htim4, TIM_CHANNEL_4, pwm_outA);
+        __HAL_TIM_SetCompare(&htim4, TIM_CHANNEL_3, 0);
 
-		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
-		__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
-	}
+        __HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_2, pwm_outB);
+        __HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0);
+    }
 }
+//void move(int direction){
+//	//int pwmVal = motor_speed;
+//	if (direction == 1){
+//		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
+//		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
+//
+//		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
+//		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_1, speedB); // PWM to Motor B (IN2)
+//	}
+//	else if (direction == 2){
+//		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4, speedA);
+//		__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0); // PWM to Motor A (IN1)
+//
+//		__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
+//		__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
+//	}
+//}
+
+//void testMoveThread(void* arg){
+//    for (;;){
+//        if (move_flag != 0){
+//            // 现在的 speedA 和 speedB 已�?在 encoder 里被 PID 实时算好了
+//            move(move_flag);
+//
+//            // 如果你�?�常想�?留陀螺仪微调，�?�在这里�?留一�?段
+//            if (straighten_flag == 1) {
+//                // 这里的 turn() �?�影�?�?轮方�?�，�?影�?�?�轮动力，所以�?冲�?
+//                // ... 你原本的陀螺仪 turn 代�? ...
+//            }
+//        } else {
+//            stop();
+//        }
+//        osDelay(10); // 物�?�刷新�?�以快一点
+//    }
+//}
+
+void encoder(void *argument)
+{
+    /* --- 1. 定义 PID 参数 --- */
+    const int TARGET_TICK = 160;     // 50ms内期望的脉冲数（根据你的电机调整）
+    const float Kp_speed = 12.0f;    // 速度环：补偿摩擦力
+    const float Kp_sync = 10.0f;     // 同步环：修正左右位移差
+
+    int16_t CA, CB, prevCA = 0, prevCB = 0;
+    prevCA = __HAL_TIM_GET_COUNTER(&htim2);
+    prevCB = __HAL_TIM_GET_COUNTER(&htim3);
+
+    for(;;)
+    {
+        // 2. 计算 50ms 增量
+        CA = __HAL_TIM_GET_COUNTER(&htim2);
+        CB = __HAL_TIM_GET_COUNTER(&htim3);
+
+        int16_t Adiff = (int16_t)(CA - prevCA);
+        int16_t Bdiff = (int16_t)(CB - prevCB);
+
+        prevCA = CA;
+        prevCB = CB;
+
+        // 3. 更新累计位移
+        Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+        // 注意：如果你的 B 轮编码器是反向安装，这里用减号
+        Bdist -= (float)Bdiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+        average_dist = (Adist + Bdist) / 2.0f;
+
+        // 4. 核心 PID 控制逻辑
+        if (move_flag == 1 || move_flag == 2 || turn_in_place_flag == 1)
+        {
+            // A. 速度补偿：如果实际速度 < 目标，误差为正，PWM 自动上调
+            float current_speed = (float)abs(Adiff);
+            //float speed_error = speedA_target - current_speed;
+            int speed_error_a = 0;
+            int speed_error_b = 0;
+            // 计算基础 PWM：原本设定的 speedA + PID 补偿
+            //int base_pwm_a = speedA_target + (int)(speed_error * Kp_speed);
+
+            current_speed = (float)abs(Bdiff);
+            //speed_error = speedB_target - current_speed ;
+            //int base_pwm_b = speedB_target + (int)(speed_error * Kp_speed);
+            // B. 直线补正：如果 A 跑多了，error 为正，那么 speedA 减小，speedB 增加
+
+            /*
+            float dist_error = Adist - Bdist;
+            int sync_correction = (int)(dist_error * Kp_sync);
+            sync_correction = 0; // testing for now. since turn in place requires the wheels to spin at different speeds, this will cause problems.
+            // 5. 最终输出赋值给全局变量 speedA/B
+            speedA = base_pwm_a - sync_correction;
+            speedB = base_pwm_b + sync_correction;
+            */
+
+            // CHECK THE EXPECTED ENCODER VALUE FOR THE TARGET SPEED.
+            // IF THE ACTUAL ENCODER VALUE IS NOT MATCHING, GRADUALLY INCREASE THE SPEED UNTIL ITS CLOSE ENOUGH.
+
+            if (speedA_target > SPEED_MIN){
+            	// only do it if its at least of a certain speed
+				if (abs(Adiff) < abs(pwm_to_encoder(speedA_target))){
+					speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target) - abs(Adiff));
+					if (approaching_flag){
+						speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target / 2) - abs(Adiff));
+					}
+				}
+            }
+
+            if (speedB_target > SPEED_MIN){
+				// only do it if its at least of a certain speed
+				if (abs(Bdiff) < abs(pwm_to_encoder(speedB_target))){
+					speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target) - abs(Bdiff));
+					if (approaching_flag){
+						speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target/2) - abs(Bdiff));
+					}
+				}
+			}
+
+
+            speedA = speedA_target + speed_error_a;
+            speedB = speedB_target + speed_error_b;
+
+            if (approaching_flag){
+            	speedA = speedA_target / 2 + speed_error_a;
+            	speedB = speedB_target / 2 + speed_error_b;
+            }
+
+            char buf[20];
+            sprintf(buf, "S %d, %d, %d", (int)speed_error_a, encoder_to_pwm(abs(Adiff)), (int) speedA_target);
+            display(buf, 2);
+
+            // 6. 安全限幅
+            if (speedA > 7000) speedA = 7000; //if (speedA < 500) speedA = 500;
+            if (speedB > 7000) speedB = 7000; //if (speedB < 500) speedB = 500;
+
+            pwm_outA = speedA;
+            pwm_outB = speedB;
+        }
+        else
+        {
+        	pwm_outA = 0;
+            pwm_outB = 0;
+            stop(); // 确保 move_flag 为 0 时彻底停下
+
+        }
+        // 在 encoder 任务的限幅代码后面加上：
+
+        // C. 实时反馈：在 OLED 第二行显示进度
+
+        // OLED 调试信息
+        char buf[30];
+        sprintf(buf, "V:%d D:%.1f", Adiff, average_dist);
+        display((uint8_t*)buf, 3);
+
+        osDelay(50); // 采样周期调至 50ms
+    }
+}
+
+void buzz(){
+	// toggles the buzzer.
+	HAL_GPIO_TogglePin(Buzz_Pin_GPIO_Port, Buzz_Pin_Pin);
+}
+
+
+int pwm_to_encoder(int pwm){
+	// returns the expected encoder value for a given pwm value.
+	// i wrote down the encoder values for pwm values starting from 0 to 4000 and stepping by 200
+	// assume the linear line between 2 points is close enough to the actual pwm value corresponding to that encoder
+	// example: given pwm value of 2444, it will be map[2400] + (map[2600] - map[2400] * 44/200)
+
+	// using an array since its in the helper function. just multiply the index by 200.
+	//const int map = {};
+
+	// OK WELL. during testing it seems like linearly every 200 increase in pwm = 6.7 (lol) increase in encoder.
+	// the starting value of 600 = 16
+	// or at least, its veeeery close to it.
+	return (pwm - 600)/200 * 6.7 + 16;
+}
+
+int encoder_to_pwm(int encoder){
+	// read pwm_to_encoder and its just the opposite of the formula there.
+	return (encoder - 16) / 6.7 * 200 + 600;
+}
+
+/*
+void testMoveThread(void* arg){
+    float Kp_gyro = 1.5f; // 这个系数决定了修正的�?��?度
+    static int start_angle = 0;
+    static int is_moving = 0;
+
+    for (;;){
+        if (move_flag != 0){
+            // 记录刚开始移动时的角度作为基准
+            if (is_moving == 0) {
+                start_angle = turned_angle;
+                is_moving = 1;
+            }
+
+            if (straighten_flag == 1){
+                // 计算角度�??差
+                int angle_error = turned_angle - start_angle;
+
+                // PID 核心逻辑：转�?�角度 = 中值 + (�??差 * 系数)
+                // 如果是�?进(move_flag=1)，逻辑如下：
+                int servo_output = SERVO_STRAIGHT;
+                if (move_flag == 1) {
+                    servo_output = SERVO_STRAIGHT + (int)(angle_error * Kp_gyro);
+                } else { // �?�退(move_flag=2) 修正方�?�相�??
+                    servo_output = SERVO_STRAIGHT - (int)(angle_error * Kp_gyro);
+                }
+
+                // �?幅：防止舵机打死
+                if(servo_output > SERVO_RIGHT_MAX) servo_output = SERVO_RIGHT_MAX;
+                if(servo_output < SERVO_LEFT_MAX) servo_output = SERVO_LEFT_MAX;
+
+                turn(servo_output);
+            }
+
+            // 这里的 move 内部会自动使用 encoder 线程算好的 speedA/B
+            move(move_flag);
+        } else {
+            if (is_moving == 1) {
+                stop();
+                turn(SERVO_STRAIGHT); // �?�下时舵机回正
+                is_moving = 0;
+            }
+        }
+        osDelay(20); // 给系统和传感器留点喘�?�时间（50Hz 刷新率）
+
+    }
+}
+*/
 
 void testMoveThread(void* arg){
 	char command[20];
@@ -387,6 +632,8 @@ void turn_in_place(int angle, int dir){
 
 	// dir = 0 => Clockwise
 	// dir = 1 => CounterClockwise
+
+	turn_in_place_flag = 1;
 	if (dir == 0) {
 		int target_angle = turned_angle - angle;
 		turn(SERVO_LEFT_MAX);
@@ -397,16 +644,18 @@ void turn_in_place(int angle, int dir){
 				//display(buf, 2);
 				if (turned_angle - target_angle < 30) {
 					// slow down when approaching the target angle
+					set_speed(SPEED_SLOW, SPEED_NORM);
 					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
-					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, SPEED_SLOW); // PWM to Motor A (IN2)
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
 
-					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, SPEED_NORM);
+					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
 					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
 				} else {
+					set_speed(SPEED_NORM, SPEED_HIGH);
 					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
-					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, SPEED_NORM); // PWM to Motor A (IN2)
+					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
 
-					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, SPEED_HIGH);
+					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
 					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
 				}
 			}
@@ -443,6 +692,7 @@ void turn_in_place(int angle, int dir){
 			else {
 				stop();
 				turn(SERVO_STRAIGHT);
+				turn_in_place_flag = 0;
 				return;
 			}
 		}
@@ -474,57 +724,103 @@ void icm20948_init(void){
 	HAL_I2C_Mem_Write(&hi2c2, 0x0C<<1, 0x31, I2C_MEMADD_SIZE_8BIT, &data, 1, 1000);
 }
 
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
-	HAL_UART_Transmit(&huart3, rxBuffer, 10, 10);
-	if(huart == &huart3){
-		rxBuffer[Size] = "\0";
-		HAL_UART_Transmit(&huart3, rxBuffer, 10, 10);
-		snprintf(command_buf, Size, strtok(rxBuffer, ";"));
-		if(strlen(command_buf) > 0) ready_parse = 1;
-		HAL_UARTEx_ReceiveToIdle_DMA(&huart3, rxBuffer, 100);
-	}
-}
+//void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
+//	HAL_UART_Transmit(&huart3, rxBuffer, 10, 10);
+//	if(huart == &huart3){
+//		rxBuffer[Size] = "\0";
+//		HAL_UART_Transmit(&huart3, rxBuffer, 10, 10);
+//		snprintf(command_buf, Size, strtok(rxBuffer, ";"));
+//		if(strlen(command_buf) > 0) ready_parse = 1;
+//		HAL_UARTEx_ReceiveToIdle_DMA(&huart3, rxBuffer, 100);
+//	}
+//}
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
-	/* This function is (automatically?) called upon interrupt when getting input via the UART i think */
-	//TODO: completely untested
+    if (huart->Instance == USART3) {
+        // 1. 处�?�清除符 ':'
+        if (uart_input == ':') {
+            command_len = 0;
+            memset((uint8_t*)command_buf, 0, MAX_BUF_SIZE);
+            send((uint8_t*)"Buffer Cleared\r\n");
+        }
+        // 2. 处�?�指令结�?�符 ';'
+        else if (uart_input == ';'){
+            command_buf[command_len] = '\0';
 
-	/* special characters:
-		: = clear buffer
-		; = end of command, set ready flag
-		command logic is in parse_command()
-	*/
+            // --- 核心修�?：手动将数�?��?装并�?入队列 ---
+            Command cmd;
+            memset(cmd.command, 0, 20);
+            strncpy((char*)cmd.command, (const char*)command_buf, command_len);
+            cmd.command_len = command_len;
 
-	// prevent unused argument(s) compilation warning
+            // 使用 FromISR 版本�?��?到队列
+            BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+            xQueueSendFromISR(commandQueue, &cmd, &xHigherPriorityTaskWoken);
+            portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+            // ---------------------------------------
 
-	UNUSED(huart);
+            command_len = 0; // �?置缓冲区索引
+            ready_execute = 1;
+        }
+        // 3. 正常字符处�?�（修�? 0 输入问题）
+        else {
+            if (uart_input >= 32 && uart_input <= 126) {
+                if (command_len < MAX_BUF_SIZE - 1) {
+                    command_buf[command_len++] = uart_input;
+                    command_buf[command_len] = '\0';
+                }
+            }
+        }
 
-	if (command_len == MAX_BUF_SIZE - 1){ // for null terminator
-		// TODO: transmit to the pi that command exceeds buffer.
-		// Refresh the command buffer
-		command_buf[0] = '\0';
-		command_len = 0;
-		display("out of spaaace", 1);
-	}
+        // 4. 调试回显
+        //send((uint8_t*)"buf:");
+        //send((uint8_t*)command_buf);
+        // (uint8_t*)"\r\n");
 
-	if (uart_input == ':') {
-		command_len = 0;
-		command_buf[0] = '\0';
-	} else if (uart_input == ';'){
-		command_buf[command_len] = '\0';
-		command_len = 0;
-		ready_parse = 1;
-	} else {
-		command_buf[command_len] = uart_input; // append only if not special character
-		command_len++;
-	}
-	send("buf:");
-	send(command_buf);
-	send("     |");
-	// wait for another receive
-	HAL_UART_Receive_IT(&huart3, &uart_input, 1);
+        // 5. �?新开�?�接收
+        HAL_UART_Receive_IT(&huart3, (uint8_t *)&uart_input, 1);
+    }
 }
-
+//void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
+//	/* This function is (automatically?) called upon interrupt when getting input via the UART i think */
+//	//TODO: completely untested
+//
+//	/* special characters:
+//		: = clear buffer
+//		; = end of command, set ready flag
+//		command logic is in parse_command()
+//	*/
+//
+//	// prevent unused argument(s) compilation warning
+//
+//	UNUSED(huart);
+//
+//	if (command_len == MAX_BUF_SIZE - 1){ // for null terminator
+//		// TODO: transmit to the pi that command exceeds buffer.
+//		// Refresh the command buffer
+//		command_buf[0] = '\0';
+//		command_len = 0;
+//		display("out of spaaace", 1);
+//	}
+//
+//	if (uart_input == ':') {
+//		command_len = 0;
+//		command_buf[0] = '\0';
+//	} else if (uart_input == ';'){
+//		command_buf[command_len] = '\0';
+//		command_len = 0;
+//		ready_parse = 1;
+//	} else {
+//		command_buf[command_len] = uart_input; // append only if not special character
+//		command_len++;
+//	}
+//	send("buf:");
+//	send(command_buf);
+//	send("     |");
+//	// wait for another receive
+//	HAL_UART_Receive_IT(&huart3, &uart_input, 1);
+//}
+//
 void parse_command_thread(void* args){
 	for(;;){
 		if (ready_parse == 1){
@@ -568,21 +864,56 @@ void move_by_dist(int dir, int dist_target){
 	while (abs(dist_moved) < abs(dist_target)) {
 		dist_moved = average_dist - starting_dist;
 		sprintf(buf, "%d - %d = %d", abs(dist_target), abs(dist_moved), abs(dist_target) - abs(dist_moved));
-		display(buf, 2);
+		//fdisplay(buf, 2);
+
 		dist_to_go = (abs(dist_target) - abs(dist_moved));
-		if (dist_to_go <= 10){
+		if (dist_to_go <= 15){
 			// slow down if 10 cm away
 			//TODO implement PIDDDDD AHHH
-			tmp = ((SPEED_SLOW - SPEED_VERY_SLOW) / 10 * dist_to_go)  + SPEED_VERY_SLOW;
-			speedA = tmp;
-			speedB = tmp;
-		} else {
-			speedA = SPEED_NORM;
-			speedB = SPEED_NORM;
+			//tmp = ((SPEED_SLOW - SPEED_VERY_SLOW) / 10 * dist_to_go)  + SPEED_VERY_SLOW;
+			//speedA = tmp;
+			//speedB = tmp;
+			//set_speed(speedA_target )
+			approaching_flag = 1;
+		} else { // stop it 2cm early to prevent overshooting.
+			approaching_flag = 0;
 		}
 	}
 
 	move_flag = 0;
+}
+
+void calibrate(){
+	// keep moving forward by 10cm. track the actual distance moved. get the cndoer
+	float sum = 0;
+	float dist_moved;
+	float prev_dist = average_dist;
+
+	for (int i =0; i<5; i++){
+		//xQueueSend(commandQueue, "FW 10", portMAX_DELAY);
+
+		set_speed(SPEED_NORM, SPEED_NORM);
+		straighten_flag = 1;
+		move_by_dist(1, 10);
+		straighten_flag = 0;
+
+		osDelay(1000);
+		dist_moved = average_dist;
+		sum += average_dist - prev_dist - 10;
+		prev_dist = average_dist;
+	}
+	char buf[20];
+	forward_error = sum / 5;
+	sprintf(buf, "%.1f", forward_error);
+	display(buf, 1);
+
+
+}
+void set_speed(int sA, int sB){
+	speedA_target = sA;
+	speedB_target = sB;
+	speedA = sA;
+	speedB = sB;
 }
 
 void execute_command_thread(void* args){
@@ -626,37 +957,46 @@ void execute_command_thread(void* args){
 				tmp[cmd.command_len] = '\0';
 				sscanf(tmp, "%s %d", command, &value);
 
-				display(tmp, 3);
-				send(command);
-				if (strcmp(command, commands[0]) == 0 ){ //FWD
-					// check the encoder dist and stop when the target is reached
 
-					// TODO: remove the flag implementation cuz it sucks
+				// REDUCE BY A CALIBRATED ERROR. THIS WILL LIKELY NEED TO CHANGE IN THE FUTURE TODO:
+				value -= forward_error;
+				display(tmp, 3);
+				//send(command);
+				if (strcmp(command, commands[0]) == 0 ){ //FWD
+
+					/*
+					for(int i = 600; i< 4000; i += 200){
+						set_speed(SPEED_NORM, i);
+						move_by_dist(1, 300);
+						osDelay(3000);
+					}
+
+					continue;
+					*/
+					set_speed(SPEED_NORM, SPEED_NORM);
 					straighten_flag = 1;
 					move_by_dist(1, value);
 					straighten_flag = 0;
-					send("OK!");
 				}
 				if (strcmp(command, commands[1]) == 0){ //BCK
+					set_speed(SPEED_NORM, SPEED_NORM);
 					straighten_flag = 1;
 					move_by_dist(2, value);
 					straighten_flag = 0;
-					send("OK!");
 				}
 				if (strcmp(command, commands[2]) == 0){ //LFT
 					turn_flag = value; //TODO: change to left
 					osDelay(1000);
-					send("OK!");
 				}
 				if (strcmp(command, commands[3]) == 0){ //CW //testing turn in place
-					turn_in_place(value, 0);
-					send("OK!");
+					turn_in_place(value - 1, 0); // hardcode a -1 for inertia... it feels bad but it kinda works so eh
 				}
 				if (strcmp(command, commands[4]) == 0){ //CCW //testing turn in place
 					turn_in_place(value, 1);
-					send("OK!");
 				}
 				if (strcmp(command, commands[5]) == 0){ //FL
+					//set_speed(SPEED_SLOW, SPEED_NORM);
+					set_speed(SPEED_NORM /2 , SPEED_NORM); // min to norm is 9:1 ratio.
 					turn_flag = SERVO_LEFT;
 					osDelay(500); // wait for the servo to turn
 					move_by_dist(1, value);
@@ -682,9 +1022,10 @@ void execute_command_thread(void* args){
 
 					turn_flag = SERVO_STRAIGHT;
 
-					send("OK!");
 				}
 				if (strcmp(command, commands[6]) == 0){ //FR
+					set_speed(SPEED_NORM, SPEED_NORM / 2);
+
 					turn_flag = SERVO_RIGHT;
 					osDelay(500); // wait for the servo to turn
 					move_by_dist(1, value);
@@ -711,9 +1052,9 @@ void execute_command_thread(void* args){
 					turn_flag = SERVO_STRAIGHT;
 					*/
 
-					send("OK!");
 				}
 				if (strcmp(command, commands[7]) == 0){ //BL
+					set_speed(SPEED_NORM, SPEED_NORM /2 );
 					turn_flag = SERVO_RIGHT;
 					osDelay(500); // wait for the servo to turn
 					move_by_dist(2, value);
@@ -736,9 +1077,9 @@ void execute_command_thread(void* args){
 
 					turn_flag = SERVO_STRAIGHT;
 					*/
-					send("OK!");
 				}
 				if (strcmp(command, commands[8]) == 0){ //BR
+					set_speed(SPEED_NORM / 2, SPEED_NORM);
 					turn_flag = SERVO_LEFT;
 					osDelay(500); // wait for the servo to turn
 					move_by_dist(2, value);
@@ -761,9 +1102,11 @@ void execute_command_thread(void* args){
 
 					turn_flag = SERVO_STRAIGHT;
 					*/
-					send("OK!");
 				}
 				if (strcmp(command, commands[9]) == 0){ //A4
+					// we get 2mins to calibrate the bot, so ill just hijack this thread to do my calibration
+					calibrate();
+					/*
 					// THIS IS FL BUT VALUE IS DEGREE TURN NOT DIST
 					turn(SERVO_LEFT);
 					osDelay(300);
@@ -784,6 +1127,8 @@ void execute_command_thread(void* args){
 					speedA = SPEED_NORM;
 					speedB = SPEED_NORM;
 					turn(SERVO_STRAIGHT);
+
+					*/
 				}
 				// reset the shared vars
 				//memset(command_buf, 0, MAX_BUF_SIZE);
@@ -791,7 +1136,11 @@ void execute_command_thread(void* args){
 				// wait 100ms after each command so the bot has time to stop...
 				// idk if this is necessary, maybe can try to remove this in the future?
 				// might have to change the motorthread, there is a race condition without this delay...
-				osDelay(100);
+
+				//buzz(); // turn on buzzer to show sending ok
+				send("OK!");
+				//osDelay(1000); // change this to 100 later. setting higher for debugging buzzer
+				//buzz(); // turn off
 				ready_execute = 1;
 			}
 		}
@@ -878,7 +1227,33 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+
   commandQueue = xQueueCreate(2, sizeof(Command));
+  /* --- 强行测试代�?开始 --- */
+  // 确�?队列已�?创建好了 (commandQueue = xQueueCreate...)
+
+  /* --- 强行测试代�?结�?� --- */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* creation of EncoderTask */
+  EncoderTaskHandle = osThreadNew(encoder, NULL, &EncoderTask_attributes);
+
+  /* creation of readICMTask */
+  readICMTaskHandle = osThreadNew(readICM, NULL, &readICMTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  oledTaskHandle = osThreadNew(display_thread, NULL, &oledTask_attributes);
+  moveTaskHandle = osThreadNew(testMoveThread, NULL, &moveTask_attributes);
+  turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
+  parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
+  executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
+
+  /* Start scheduler */
+  osKernelStart();
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -898,6 +1273,11 @@ int main(void)
   turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
   parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
   executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
+
+  /* Start scheduler */
+  osKernelStart();
+  /* USER CODE END RTOS_QUEUES */
+
 
   /* USER CODE END RTOS_THREADS */
 
@@ -1339,6 +1719,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, OLED_DC_Pin_Pin|OLED_RES_Pin_Pin|OLED_SDA_Pin_Pin|OLED_SCL_Pin_Pin, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(Buzz_Pin_GPIO_Port, Buzz_Pin_Pin, GPIO_PIN_RESET);
+
   /*Configure GPIO pin : LED3_Pin */
   GPIO_InitStruct.Pin = LED3_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1358,6 +1741,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : Buzz_Pin_Pin */
+  GPIO_InitStruct.Pin = Buzz_Pin_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(Buzz_Pin_GPIO_Port, &GPIO_InitStruct);
 
 }
 
@@ -1410,111 +1800,111 @@ void StartDefaultTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_encoder */
-void encoder(void *argument)
-{
+//void encoder(void *argument)
+//{
   /* USER CODE BEGIN encoder */
-	int16_t CA, CB, prevCA, prevCB; // this might have to be unsigned for the pid controller. TODO
-	int32_t Adiff, Bdiff;
-	int32_t Adiffraw, Bdiffraw;
-
-	char buf[20] = "TESTING!";
-
-	prevCA = __HAL_TIM_GET_COUNTER(&htim2);
-	prevCB = __HAL_TIM_GET_COUNTER(&htim3);
-
-  /* Infinite loop */
-  for(;;)
-  {
-	  //motor A
-	  CA = __HAL_TIM_GET_COUNTER(&htim2);
-	  Adiffraw = (int16_t) CA - prevCA;
-
-	  /*
-	  // checking under/over flow
-	  if (Adiffraw > 32767){
-		  Adiff = Adiffraw - 65536;
-	  }
-	  if (Adiffraw < -32767){
-		  Adiff = Adiffraw + 65536;
-	  }
-	  */
-	  prevCA = CA;
-
-	  //motor B
-	  CB = __HAL_TIM_GET_COUNTER(&htim3);
-	  Bdiffraw = (int16_t) CB - prevCB;
-
-	  /*
-	  // checking under/over flow
-	  if (Bdiffraw > 32767){
-		  Bdiff = Bdiffraw - 65536;
-	  }
-	  if (Bdiffraw < -32767){
-		  Bdiff = Bdiffraw + 65536;
-	  }
-	  */
-	  prevCB = CB;
-
-	  Adist += (float)Adiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-	  //Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-	  Bdist -= (float)Bdiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-
-	  // TODO: THIS PROBABLY OVERFLOWS AFTER A CERTAIN DISTANCE (CA/CB LOOPS BACK TO 0). ACCOUNT FOR THIS
-	  //Adist = CA / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-
-	  //if (CB == 0){
-	//	  CB = 65536;
-	 // }
-	  //Bdist = (65536 - CB) / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-	  //Bdist = -CB / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-
-	  average_dist = (Adist + Bdist) / 2; // TODO: PID!!!! PID!!
-	  //itoa(Adist * 1000, buf, 10);
-	  sprintf(buf, "%d %d Dist: %d", (int)Adiff, (int)Bdiff, (int) average_dist);
-	  //OLED_ShowString(10,20, buf);
-	  display(buf, 3);
-
-	  // sucky bad feedforward gain compensation because me too dumb for pid controlelr
-	  // literally just measures the % diff between the wheels and adjusts the pwm value accordingly
-	  // gpt gave me this idea lol
-
-
-
-	  /*
-		// MotorA & MotorB speed difference fix
-		float headingError = Adist - Bdist;
-		const float Kp_heading = 1.0f;
-		const float Ki_heading = 1.0f;
-		const float Kd_heading = 1.0f;
-
-		static float headingIntegral = 0.0f;
-		static float prevHeadingError = 0.0f;
-
-		headingIntegral += headingError;
-		if(headingIntegral > 100) headingIntegral = 100;
-		if(headingIntegral < -100) headingIntegral = -100;
-
-		float headingDerivative = headingError - prevHeadingError;
-		prevHeadingError = headingError;
-		float headingCorrection = Kp_heading * headingError + Ki_heading * headingIntegral + Kd_heading * headingDerivative;
-
-		sprintf(buf, "%d", (int)headingCorrection);
-			  //OLED_ShowString(10,20, buf);
-		display(buf, 1);
-
-		speedA -= headingCorrection;
-		speedB += headingCorrection;
-
-		if (speedA > 7199) speedA = 7199;
-		if (speedA < 0) speedA = 0;
-		if (speedB > 7199) speedB = 7199;
-		if (speedB < 0) speedB = 0;
-	*/
-	  vTaskDelay(pdMS_TO_TICKS(1));
-	  //osDelay(1); // idk why but it breaks if theres no delay.
-  }
+//	int16_t CA, CB, prevCA, prevCB; // this might have to be unsigned for the pid controller. TODO
+//	int32_t Adiff, Bdiff;
+//	int32_t Adiffraw, Bdiffraw;
+//
+//	char buf[20] = "TESTING!";
+//
+//	prevCA = __HAL_TIM_GET_COUNTER(&htim2);
+//	prevCB = __HAL_TIM_GET_COUNTER(&htim3);
+//
+//  /* Infinite loop */
+//  for(;;)
+//  {
+//	  //motor A
+//	  CA = __HAL_TIM_GET_COUNTER(&htim2);
+//	  Adiffraw = (int16_t) CA - prevCA;
+//
+//	  /*
+//	  // checking under/over flow
+//	  if (Adiffraw > 32767){
+//		  Adiff = Adiffraw - 65536;
+//	  }
+//	  if (Adiffraw < -32767){
+//		  Adiff = Adiffraw + 65536;
+//	  }
+//	  */
+//	  prevCA = CA;
+//
+//	  //motor B
+//	  CB = __HAL_TIM_GET_COUNTER(&htim3);
+//	  Bdiffraw = (int16_t) CB - prevCB;
+//
+//	  /*
+//	  // checking under/over flow
+//	  if (Bdiffraw > 32767){
+//		  Bdiff = Bdiffraw - 65536;
+//	  }
+//	  if (Bdiffraw < -32767){
+//		  Bdiff = Bdiffraw + 65536;
+//	  }
+//	  */
+//	  prevCB = CB;
+//
+//	  Adist += (float)Adiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+//	  //Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+//	  Bdist -= (float)Bdiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+//
+//	  // TODO: THIS PROBABLY OVERFLOWS AFTER A CERTAIN DISTANCE (CA/CB LOOPS BACK TO 0). ACCOUNT FOR THIS
+//	  //Adist = CA / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+//
+//	  //if (CB == 0){
+//	//	  CB = 65536;
+//	 // }
+//	  //Bdist = (65536 - CB) / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+//	  //Bdist = -CB / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+//
+//	  average_dist = (Adist + Bdist) / 2; // TODO: PID!!!! PID!!
+//	  //itoa(Adist * 1000, buf, 10);
+//	  sprintf(buf, "%d %d Dist: %d", (int)Adiff, (int)Bdiff, (int) average_dist);
+//	  //OLED_ShowString(10,20, buf);
+//	  display(buf, 3);
+//
+//	  // sucky bad feedforward gain compensation because me too dumb for pid controlelr
+//	  // literally just measures the % diff between the wheels and adjusts the pwm value accordingly
+//	  // gpt gave me this idea lol
+//
+//
+//
+//	  /*
+//		// MotorA & MotorB speed difference fix
+//		float headingError = Adist - Bdist;
+//		const float Kp_heading = 1.0f;
+//		const float Ki_heading = 1.0f;
+//		const float Kd_heading = 1.0f;
+//
+//		static float headingIntegral = 0.0f;
+//		static float prevHeadingError = 0.0f;
+//
+//		headingIntegral += headingError;
+//		if(headingIntegral > 100) headingIntegral = 100;
+//		if(headingIntegral < -100) headingIntegral = -100;
+//
+//		float headingDerivative = headingError - prevHeadingError;
+//		prevHeadingError = headingError;
+//		float headingCorrection = Kp_heading * headingError + Ki_heading * headingIntegral + Kd_heading * headingDerivative;
+//
+//		sprintf(buf, "%d", (int)headingCorrection);
+//			  //OLED_ShowString(10,20, buf);
+//		display(buf, 1);
+//
+//		speedA -= headingCorrection;
+//		speedB += headingCorrection;
+//
+//		if (speedA > 7199) speedA = 7199;
+//		if (speedA < 0) speedA = 0;
+//		if (speedB > 7199) speedB = 7199;
+//		if (speedB < 0) speedB = 0;
+//	*/
+//	  vTaskDelay(pdMS_TO_TICKS(1));
+//	  //osDelay(1); // idk why but it breaks if theres no delay.
+//  }
   /* USER CODE END encoder */
-}
+//}
 
 /* USER CODE BEGIN Header_readICM */
 /**
@@ -1683,7 +2073,8 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
+
+#ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
