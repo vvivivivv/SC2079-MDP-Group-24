@@ -39,8 +39,8 @@ from entities.Robot import Robot
 from entities.Entity import Obstacle, CellState, Grid
 from consts import (
     Direction, ITERATIONS,
-    ROBOT_TURN_RADIUS_CM,
-    ROBOT_TURN_RADIUS_LEFT_CM, ROBOT_TURN_RADIUS_RIGHT_CM,
+    ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
+    ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM,
     ROBOT_TURN_RADIUS_MAX_CM, ROBOT_TURN_RADIUS_MIN_CM,
     ROBOT_SPEED_CM_S,
     PIVOT_OFFSET_X, PIVOT_OFFSET_Y,
@@ -167,7 +167,7 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
         (is_clear, segments, total_length) or (False, None, inf)
     """
     ARENA = 200.0
-    CLEARANCE = 15.0
+    CLEARANCE = 18.0
     CAPTURE_CLEARANCE = 22.0
 
     result = get_optimal_path_segments(start, end, radius)

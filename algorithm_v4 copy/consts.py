@@ -8,21 +8,24 @@ from enum import Enum
 ROBOT_AXLE_TRACK_CM = 16.0
 ROBOT_WHEELBASE_CM = 20.0
 
-# Asymmetric turning radii — MEASURE BOTH on the real robot!
-# Due to wear, motor differences, weight distribution, etc., left and
-# right arcs will have different radii. Measure by driving a full circle
-# in each direction and computing R = circumference / (2*pi).
-ROBOT_TURN_RADIUS_LEFT_CM = 24.3 # FL/BL arc radius (tune this!)
-ROBOT_TURN_RADIUS_RIGHT_CM = 24.2  # FR/BR arc radius (tune this!)
+# 4 independent turning radii — MEASURE ALL on the real robot!
+# Drive a full circle in each mode, measure circumference, R = circ / (2*pi).
+# Forward and reverse radii differ because weight distribution shifts.
+ROBOT_TURN_RADIUS_FL_CM = 24.3   # Forward Left arc radius
+ROBOT_TURN_RADIUS_FR_CM = 24.2   # Forward Right arc radius
+ROBOT_TURN_RADIUS_BL_CM = 23.1   # Backward Left arc radius  
+ROBOT_TURN_RADIUS_BR_CM = 26   # Backward Right arc radius 
 
-# Derived values used throughout the planner:
-#   MAX: conservative — used for RS direct paths & collision checking
-#        (guarantees the robot fits through gaps)
-#   MIN: aggressive — used for RS heuristic (admissible lower bound)
-#        (the robot CAN turn this tight in one direction)
-ROBOT_TURN_RADIUS_MAX_CM = max(ROBOT_TURN_RADIUS_LEFT_CM, ROBOT_TURN_RADIUS_RIGHT_CM)
-ROBOT_TURN_RADIUS_MIN_CM = min(ROBOT_TURN_RADIUS_LEFT_CM, ROBOT_TURN_RADIUS_RIGHT_CM)
-# Legacy alias (use specific left/right/max/min where possible)
+# Derived values for planner:
+#   MAX: used for RS direct paths & collision checking (conservative)
+#   MIN: used for RS heuristic (admissible lower bound)
+ROBOT_TURN_RADIUS_MAX_CM = max(ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
+                                ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM)
+ROBOT_TURN_RADIUS_MIN_CM = min(ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
+                                ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM)
+# Legacy aliases
+ROBOT_TURN_RADIUS_LEFT_CM = ROBOT_TURN_RADIUS_FL_CM
+ROBOT_TURN_RADIUS_RIGHT_CM = ROBOT_TURN_RADIUS_FR_CM
 ROBOT_TURN_RADIUS_CM = ROBOT_TURN_RADIUS_MAX_CM
 
 ROBOT_SPEED_CM_S = 30.0
@@ -35,7 +38,7 @@ ROBOT_RADIUS_CM = math.sqrt((ROBOT_LENGTH_CM/2)**2 + (ROBOT_WIDTH_CM/2)**2)
 # ============================================================================
 # Minimum face-to-camera distance for a readable image.
 # Below this the face is too close / blurry / partially out of frame.
-SNAP_MIN_DIST_CM = 15.0
+SNAP_MIN_DIST_CM = 20.0
 
 # Maximum face-to-camera distance (beyond this, resolution is too low)
 SNAP_MAX_DIST_CM = 50.0

@@ -3,7 +3,7 @@ Entity.py - Arena objects: CellState, Obstacle, Grid.
 
 View Cone Generation (updated for wide-angle capture):
   - Camera HFOV: 62.2 deg (Pi Camera v2.1)
-  - Max incidence angle: 45 deg (camera must face obstacle fairly directly)
+  - Max incidence angle: 35 deg (camera must face obstacle nearly head-on)
   - Detection range: 15-50cm face-to-camera
   - Robot footprint: 30x30cm (virtual), camera at front center
   - Obstacle: 10x10cm block, virtual obstacle 40x40cm (slide 36)
@@ -34,14 +34,14 @@ from helper import is_valid
 #   dist=15cm => center 30cm from face => 35cm from obs center
 #   dist=20cm => center 35cm from face => 40cm from obs center
 #   dist=30cm => center 45cm from face => 50cm from obs center
-FACE_DISTANCES_CM = [15, 20, 25, 30]
+FACE_DISTANCES_CM = [20, 25, 30]
 
 # Camera offset from robot center (half the robot length)
 CAMERA_OFFSET_CM = 15.0
 
 # Approach angle offsets from the face normal (degrees).
 # With 75 deg max incidence and wide HFOV, we can approach from steep angles.
-APPROACH_ANGLES_DEG = [-35, -30, -15, 0, 15, 30, 35]
+APPROACH_ANGLES_DEG = [-35, -25, -15, 0, 15, 25, 35]
 
 # Safety: virtual obstacle radius
 VIRTUAL_OBS_HALF_CM = 21.0
@@ -50,7 +50,7 @@ VIRTUAL_OBS_HALF_CM = 21.0
 PENALTY_CENTER = 0
 PENALTY_MILD_ANGLE = 1      # 0-15 deg (excellent)
 PENALTY_MODERATE_ANGLE = 2   # 15-30 deg (good)
-PENALTY_STEEP_ANGLE = 4      # 30-45 deg (angled but readable)
+PENALTY_STEEP_ANGLE = 4      # 25-35 deg (max angle, still readable)
 PENALTY_FAR = 3
 PENALTY_CLOSE = 0
 PENALTY_VERY_CLOSE = 2       # < 18cm (tight but works)
@@ -148,7 +148,7 @@ class Obstacle(CellState):
         angles = APPROACH_ANGLES_DEG
 
         if retrying:
-            distances = [15, 20, 25, 30, 40]
+            distances = [20, 25, 30, 40]
             angles = [-35, -25, -15, -5, 0, 5, 15, 25, 35]
 
         for face_dist in distances:
@@ -205,7 +205,7 @@ class Obstacle(CellState):
                 # 8. Penalty
                 penalty = 0
                 abs_angle = abs(angle_off)
-                if abs_angle > 30:
+                if abs_angle > 25:
                     penalty += PENALTY_STEEP_ANGLE
                 elif abs_angle > 15:
                     penalty += PENALTY_MODERATE_ANGLE

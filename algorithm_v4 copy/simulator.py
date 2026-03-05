@@ -8,7 +8,8 @@ import tkinter
 from tkinter import filedialog, simpledialog
 from consts import (
     ROBOT_SPEED_CM_S, ROBOT_AXLE_TRACK_CM, ROBOT_TURN_RADIUS_CM,
-    ROBOT_TURN_RADIUS_LEFT_CM, ROBOT_TURN_RADIUS_RIGHT_CM,
+    ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
+    ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM,
     ROBOT_WHEELBASE_CM, PIVOT_OFFSET_X, PIVOT_OFFSET_Y
 )
 
@@ -385,8 +386,11 @@ class Robot:
         print(f"Processing: {cmd}")
         self.traveled_val = 0
 
-        req_steering_left = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_LEFT_CM)
-        req_steering_right = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_RIGHT_CM)
+        # Calculate specific steering angles for the 4 quadrants
+        req_steering_fl = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_FL_CM)
+        req_steering_fr = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_FR_CM)
+        req_steering_bl = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BL_CM)
+        req_steering_br = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BR_CM)
 
         # 1. ARC MOVES (FL, FR, BL, BR)
         if cmd[:2] in ["FR", "FL", "BR", "BL"]:
@@ -402,16 +406,16 @@ class Robot:
 
                 if cmd.startswith("FL"):
                     self.velocity = CURRENT_SPEED
-                    self.steering_angle = req_steering_left
+                    self.steering_angle = req_steering_fl
                 elif cmd.startswith("FR"):
                     self.velocity = CURRENT_SPEED
-                    self.steering_angle = -req_steering_right
+                    self.steering_angle = -req_steering_fr
                 elif cmd.startswith("BL"):
                     self.velocity = -CURRENT_SPEED
-                    self.steering_angle = -req_steering_right
+                    self.steering_angle = -req_steering_bl  # Steering right to swing rear left
                 elif cmd.startswith("BR"):
                     self.velocity = -CURRENT_SPEED
-                    self.steering_angle = req_steering_left
+                    self.steering_angle = req_steering_br   # Steering left to swing rear right
 
             except ValueError:
                 print(f"Error parsing command: {cmd}")
@@ -433,7 +437,7 @@ class Robot:
             self.velocity = -CURRENT_SPEED
             self.steering_angle = 0.0
 
-        # 3. SPOT TURNS
+        # 3. SPOT TURNS (Pivot on back-left wheel)
         elif cmd.startswith("CW"):
             try:
                 deg = int(cmd[2:])

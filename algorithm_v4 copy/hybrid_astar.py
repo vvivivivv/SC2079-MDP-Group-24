@@ -20,8 +20,10 @@ import math
 import heapq
 from consts import (
     ROBOT_TURN_RADIUS_CM,
-    ROBOT_TURN_RADIUS_LEFT_CM,
-    ROBOT_TURN_RADIUS_RIGHT_CM,
+    ROBOT_TURN_RADIUS_FL_CM,
+    ROBOT_TURN_RADIUS_FR_CM,
+    ROBOT_TURN_RADIUS_BL_CM,
+    ROBOT_TURN_RADIUS_BR_CM,
     ROBOT_TURN_RADIUS_MAX_CM,
     ROBOT_TURN_RADIUS_MIN_CM,
     ROBOT_SPEED_CM_S,
@@ -37,8 +39,11 @@ from reeds_shepp import get_optimal_path_length
 # Asymmetric radii: left and right arcs use different radii.
 # MAX is used for collision checking (conservative — robot needs this much space).
 # MIN is used for RS heuristic (admissible — robot CAN turn this tight).
-TURN_RADIUS_LEFT_CM = ROBOT_TURN_RADIUS_LEFT_CM
-TURN_RADIUS_RIGHT_CM = ROBOT_TURN_RADIUS_RIGHT_CM
+# 4 independent turning radii for each motion primitive
+TURN_RADIUS_FL_CM = ROBOT_TURN_RADIUS_FL_CM
+TURN_RADIUS_FR_CM = ROBOT_TURN_RADIUS_FR_CM
+TURN_RADIUS_BL_CM = ROBOT_TURN_RADIUS_BL_CM
+TURN_RADIUS_BR_CM = ROBOT_TURN_RADIUS_BR_CM
 TURN_RADIUS_CM = ROBOT_TURN_RADIUS_MAX_CM
 TURN_RADIUS_HEURISTIC_CM = ROBOT_TURN_RADIUS_MIN_CM
 STEP_SIZE_CM = 8.0
@@ -121,23 +126,38 @@ def _check_arc_collision(x0, y0, theta0, arc_angle, turn_radius, direction, obst
 # =============================================================================
 
 def _precompute_euler_deltas():
-    """Precompute with ASYMMETRIC left/right turning radii."""
+    """Precompute with 4 independent turning radii (FL, FR, BL, BR).
+    
+    Internal naming uses front-wheel convention:
+      'L'  = forward, front wheels left  → body turns left  → FL command
+      'R'  = forward, front wheels right → body turns right → FR command
+      'BL' = reverse, front wheels left  → body goes back-right → BR command
+      'BR' = reverse, front wheels right → body goes back-left  → BL command
+    
+    The command swap (internal BL→output BR, etc.) is in path_to_commands.
+    """
     L = ROBOT_WHEELBASE_CM
     speed = ROBOT_SPEED_CM_S
     dt = 1.0 / 60.0
     step = STEP_SIZE_CM
 
-    delta_max_left = math.atan(L / TURN_RADIUS_LEFT_CM)
-    delta_max_right = math.atan(L / TURN_RADIUS_RIGHT_CM)
+    # Steering angles derived from each radius
+    delta_fl = math.atan(L / TURN_RADIUS_FL_CM)
+    delta_fr = math.atan(L / TURN_RADIUS_FR_CM)
+    # BL/BR: user measures body direction, but front wheels are opposite
+    # Internal 'BL' (front wheels left) outputs as "BR" → uses BR radius
+    # Internal 'BR' (front wheels right) outputs as "BL" → uses BL radius
+    delta_bl_internal = math.atan(L / TURN_RADIUS_BR_CM)  # for internal 'BL' → output BR
+    delta_br_internal = math.atan(L / TURN_RADIUS_BL_CM)  # for internal 'BR' → output BL
 
     deltas = {}
     primitives = [
-        ('S',   speed,  0.0,              None),
-        ('L',   speed,  delta_max_left,   TURN_RADIUS_LEFT_CM),
-        ('R',   speed, -delta_max_right,  TURN_RADIUS_RIGHT_CM),
-        ('B',  -speed,  0.0,              None),
-        ('BL', -speed,  delta_max_left,   TURN_RADIUS_LEFT_CM),
-        ('BR', -speed, -delta_max_right,  TURN_RADIUS_RIGHT_CM),
+        ('S',   speed,  0.0,                None),
+        ('L',   speed,  delta_fl,           TURN_RADIUS_FL_CM),
+        ('R',   speed, -delta_fr,           TURN_RADIUS_FR_CM),
+        ('B',  -speed,  0.0,                None),
+        ('BL', -speed,  delta_bl_internal,  TURN_RADIUS_BR_CM),  # front wheels left, reverse → output BR
+        ('BR', -speed, -delta_br_internal,  TURN_RADIUS_BL_CM),  # front wheels right, reverse → output BL
     ]
 
     for name, v, delta, radius in primitives:
