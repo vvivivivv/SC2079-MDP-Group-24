@@ -28,7 +28,10 @@ from consts import (
     ROBOT_TURN_RADIUS_MIN_CM,
     ROBOT_SPEED_CM_S,
     ROBOT_WHEELBASE_CM,
-    ROBOT_RADIUS_CM
+    ROBOT_RADIUS_CM,
+    ENCODER_SCALE_FL, ENCODER_SCALE_FR,
+    ENCODER_SCALE_BL, ENCODER_SCALE_BR,
+    ENCODER_SCALE_FW, ENCODER_SCALE_BW
 )
 from reeds_shepp import get_optimal_path_length
 
@@ -387,6 +390,9 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
 def path_to_commands(path):
     """Convert Hybrid A* path to drive commands (distances in mm).
 
+    Arc distances are scaled by encoder correction factors so the
+    robot's encoder-based stopping matches the planned center arc.
+
     Commands:
       S  -> FW{dist_mm}   forward straight
       B  -> BW{dist_mm}   backward straight
@@ -395,6 +401,15 @@ def path_to_commands(path):
       BL -> BL{dist_mm}   full-lock left, backward
       BR -> BR{dist_mm}   full-lock right, backward
     """
+    _MOVE_MAP = {
+        'S':  ('FW', ENCODER_SCALE_FW),
+        'B':  ('BW', ENCODER_SCALE_BW),
+        'L':  ('FL', ENCODER_SCALE_FL),
+        'R':  ('FR', ENCODER_SCALE_FR),
+        'BL': ('BL', ENCODER_SCALE_BL),
+        'BR': ('BR', ENCODER_SCALE_BR),
+    }
+
     if not path or len(path) < 2:
         return []
 
@@ -410,19 +425,12 @@ def path_to_commands(path):
 
     commands = []
     for move_type, count in segments:
-        dist_mm = round(STEP_SIZE_CM * count * 10)
-        if move_type == 'S':
-            commands.append(f"FW{dist_mm}")
-        elif move_type == 'B':
-            commands.append(f"BW{dist_mm}")
-        elif move_type == 'L':
-            commands.append(f"FL{dist_mm}")
-        elif move_type == 'R':
-            commands.append(f"FR{dist_mm}")
-        elif move_type == 'BR':
-            commands.append(f"BR{dist_mm}")
-        elif move_type == 'BL':
-            commands.append(f"BL{dist_mm}")
+        entry = _MOVE_MAP.get(move_type)
+        if entry is None:
+            continue
+        prefix, scale = entry
+        dist_mm = round(STEP_SIZE_CM * count * scale * 10)
+        commands.append(f"{prefix}{dist_mm}")
 
     return commands
 

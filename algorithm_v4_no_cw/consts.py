@@ -39,6 +39,38 @@ ROBOT_TURN_RADIUS_MIN_CM = min(_ALL_RADII)
 # Legacy alias (use specific FL/FR/BL/BR/max/min where possible)
 ROBOT_TURN_RADIUS_CM = ROBOT_TURN_RADIUS_MAX_CM
 
+# ============================================================================
+# 1a. ENCODER CORRECTION FOR ARC COMMANDS
+# ============================================================================
+# The planner computes arc distances at the robot CENTER, but the real robot
+# stops based on its encoder which measures at a WHEEL — not the center.
+#
+# During a turn, the outer wheel travels farther and the inner wheel travels
+# shorter than the center arc.  The ratio is:
+#   encoder_dist = center_dist × (R ± track/2) / R
+#     + for outer wheel, − for inner wheel
+#
+# HOW TO CALIBRATE:
+#   1. Command the robot to do FR with a large distance (e.g. FR1800 = 180cm)
+#   2. Measure the actual angle turned (should be ~360° for a full circle)
+#   3. Read the encoder value when the robot completes 360°
+#   4. The scale factor = encoder_reading / commanded_distance
+#   5. Put that value below for the corresponding direction
+#
+# Set to 1.0 to disable correction (encoder = center arc).
+_HALF_TRACK = ROBOT_AXLE_TRACK_CM / 2.0  # 8.0cm
+
+# Default: assume encoder on LEFT rear wheel
+#   - FR/BR (right turn): left wheel is OUTER → factor > 1
+#   - FL/BL (left turn):  left wheel is INNER → factor < 1
+ENCODER_SCALE_FL = (ROBOT_TURN_RADIUS_FL_CM - _HALF_TRACK) / ROBOT_TURN_RADIUS_FL_CM
+ENCODER_SCALE_FR = (ROBOT_TURN_RADIUS_FR_CM + _HALF_TRACK) / ROBOT_TURN_RADIUS_FR_CM
+ENCODER_SCALE_BL = (ROBOT_TURN_RADIUS_BL_CM - _HALF_TRACK) / ROBOT_TURN_RADIUS_BL_CM
+ENCODER_SCALE_BR = (ROBOT_TURN_RADIUS_BR_CM + _HALF_TRACK) / ROBOT_TURN_RADIUS_BR_CM
+# FW/BW: no correction (both wheels travel the same distance)
+ENCODER_SCALE_FW = 1.0
+ENCODER_SCALE_BW = 1.0
+
 ROBOT_SPEED_CM_S = 30.0
 ROBOT_LENGTH_CM = 30.0
 ROBOT_WIDTH_CM = 30.0
