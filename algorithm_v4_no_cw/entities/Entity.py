@@ -40,11 +40,16 @@ FACE_DISTANCES_CM = [15, 20, 25, 30]
 CAMERA_OFFSET_CM = 15.0
 
 # Approach angle offsets from the face normal (degrees).
-# With 75 deg max incidence and wide HFOV, we can approach from steep angles.
-APPROACH_ANGLES_DEG = [-27.5, -25, -15, 0, 15, 25, 27.5]
+# Must stay within SNAP_MAX_INCIDENCE_DEG (25 deg) to ensure the obstacle
+# face is clearly visible and readable.  Tighter angles give more direct
+# line-of-sight to the face at the cost of fewer candidate positions.
+APPROACH_ANGLES_DEG = [-25, -15, 0, 15, 25]
 
 # Safety: virtual obstacle radius
-VIRTUAL_OBS_HALF_CM = 21.0
+# Conservative value (23cm) keeps the robot body well clear of obstacles
+# during capture positioning.  Tighter values (e.g. 21cm) give more
+# candidate positions but risk clipping obstacles with positioning error.
+VIRTUAL_OBS_HALF_CM = 23.0
 
 # Penalty weights (lower = preferred)
 PENALTY_CENTER = 0
@@ -222,21 +227,20 @@ class Obstacle(CellState):
                     penalty += PENALTY_CLOSE
 
                 # 9. Wall proximity penalty
-                # Only penalize when truly tight. 27cm margin with a 30cm
-                # robot is fine; penalizing it pushes the planner toward
-                # angled approaches that are harder to execute accurately
-                # with asymmetric turning radii.
+                # Conservative thresholds to avoid risky near-wall positions.
+                # With positioning error from encoder drift, ~10cm wall margin
+                # is genuinely dangerous; ~20cm is tight but workable.
                 wall_margin = min(
                     robot_x_cm - ROBOT_HALF_CM,
                     ARENA_CM - ROBOT_HALF_CM - robot_x_cm,
                     robot_y_cm - ROBOT_HALF_CM,
                     ARENA_CM - ROBOT_HALF_CM - robot_y_cm
                 )
-                if wall_margin < 5:
+                if wall_margin < 10:
                     penalty += PENALTY_WALL_CRITICAL
-                elif wall_margin < 12:
-                    penalty += PENALTY_WALL_TIGHT
                 elif wall_margin < 20:
+                    penalty += PENALTY_WALL_TIGHT
+                elif wall_margin < 30:
                     penalty += PENALTY_WALL_SNUG
 
                 cell = CellState(
@@ -315,9 +319,12 @@ class Grid:
                     robot_cy = cand.y * 10
 
                     # Check 1: robot body vs other obstacle virtual zone
+                    # Conservative clearance (+9cm) prevents the robot from
+                    # squeezing between obstacles where positioning error
+                    # could cause a collision.
                     dist = math.sqrt((robot_cx - other_cx)**2 +
                                      (robot_cy - other_cy)**2)
-                    if dist < VIRTUAL_OBS_HALF_CM + 5:
+                    if dist < VIRTUAL_OBS_HALF_CM + 9:
                         blocked = True
                         break
 

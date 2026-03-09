@@ -34,25 +34,22 @@ from entities.Robot import Robot
 from entities.Entity import Obstacle, CellState, Grid
 from consts import (
     Direction, ITERATIONS,
-    ROBOT_TURN_RADIUS_CM,
     ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
     ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM,
-    ROBOT_TURN_RADIUS_MAX_CM, ROBOT_TURN_RADIUS_MIN_CM,
+    ROBOT_TURN_RADIUS_MAX_CM,
     ROBOT_SPEED_CM_S,
     ROBOT_WHEELBASE_CM,
-    ENCODER_SCALE_FL, ENCODER_SCALE_FR,
-    ENCODER_SCALE_BL, ENCODER_SCALE_BR,
-    ENCODER_SCALE_FW, ENCODER_SCALE_BW
+    SCALE_FW, SCALE_BW, SCALE_FL, SCALE_FR, SCALE_BL, SCALE_BR,
+    OFFSET_FW, OFFSET_BW, OFFSET_FL, OFFSET_FR, OFFSET_BL, OFFSET_BR
 )
 from python_tsp.exact import solve_tsp_dynamic_programming
 from reeds_shepp import (
-    get_optimal_path_length, get_optimal_path_segments,
-    sample_path
+    get_optimal_path_length, get_optimal_path_segments
 )
 
 from hybrid_astar import (
     hybrid_astar_search, path_to_commands, build_obstacle_list,
-    TURN_RADIUS_CM, OBSTACLE_RADIUS_CM
+    OBSTACLE_RADIUS_CM
 )
 
 
@@ -79,7 +76,7 @@ def _euler_simulate_segments(start, segments):
              end_pose = (x, y, theta) — the actual endpoint.
     """
     L = ROBOT_WHEELBASE_CM
-    speed = 30.0  # ROBOT_SPEED_CM_S
+    speed = ROBOT_SPEED_CM_S
     dt = 1.0 / 60.0
 
     # Steering angle and velocity for each segment type
@@ -138,7 +135,7 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
     """
     ARENA = 200.0
     CLEARANCE = 15.0
-    CAPTURE_CLEARANCE = 25.0
+    CAPTURE_CLEARANCE = 28.0
 
     # Candidate planning radii: the four real radii plus their average.
     # Different radii produce different RS path shapes; the one whose
@@ -207,12 +204,12 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
 
 def rs_segments_to_commands(segments):
     _CMD_MAP = {
-        ('S', 'F'): ('FW', ENCODER_SCALE_FW),
-        ('S', 'B'): ('BW', ENCODER_SCALE_BW),
-        ('L', 'F'): ('FL', ENCODER_SCALE_FL),
-        ('L', 'B'): ('BR', ENCODER_SCALE_BR),
-        ('R', 'F'): ('FR', ENCODER_SCALE_FR),
-        ('R', 'B'): ('BL', ENCODER_SCALE_BL),
+        ('S', 'F'): ('FW', SCALE_FW, OFFSET_FW),
+        ('S', 'B'): ('BW', SCALE_BW, OFFSET_BW),
+        ('L', 'F'): ('FL', SCALE_FL, OFFSET_FL),
+        ('L', 'B'): ('BR', SCALE_BR, OFFSET_BR),
+        ('R', 'F'): ('FR', SCALE_FR, OFFSET_FR),
+        ('R', 'B'): ('BL', SCALE_BL, OFFSET_BL),
     }
 
     commands = []
@@ -220,8 +217,9 @@ def rs_segments_to_commands(segments):
         entry = _CMD_MAP.get((seg_type, gear))
         if entry is None:
             continue
-        prefix, scale = entry
-        dist_mm = max(10, round(length_cm * scale * 10))
+        prefix, scale, offset = entry
+        center_arc_mm = length_cm * 10
+        dist_mm = max(10, round(center_arc_mm * scale + offset))
         commands.append(f"{prefix}{dist_mm}")
     return commands
 

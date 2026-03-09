@@ -23,10 +23,6 @@ ROBOT_TURN_RADIUS_FR_CM = 30.6  #30.6   # Forward-Right arc radius (tune this!)
 ROBOT_TURN_RADIUS_BL_CM = 29.5 #30.2   # Back-Left arc radius     (tune this!)
 ROBOT_TURN_RADIUS_BR_CM = 28.6 #28.3   # Back-Right arc radius    (tune this!)
 
-# Legacy aliases for code that only needs left/right (e.g. simulator steering)
-ROBOT_TURN_RADIUS_LEFT_CM = ROBOT_TURN_RADIUS_FL_CM
-ROBOT_TURN_RADIUS_RIGHT_CM = ROBOT_TURN_RADIUS_FR_CM
-
 # Derived values used throughout the planner:
 #   MAX: conservative — used for RS direct paths & collision checking
 #        (guarantees the robot fits through gaps)
@@ -36,40 +32,33 @@ _ALL_RADII = [ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
               ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM]
 ROBOT_TURN_RADIUS_MAX_CM = max(_ALL_RADII)
 ROBOT_TURN_RADIUS_MIN_CM = min(_ALL_RADII)
-# Legacy alias (use specific FL/FR/BL/BR/max/min where possible)
-ROBOT_TURN_RADIUS_CM = ROBOT_TURN_RADIUS_MAX_CM
 
 # ============================================================================
-# 1a. ENCODER CORRECTION FOR ARC COMMANDS
+# 1a. EMPIRICAL DISTANCE CALIBRATION
 # ============================================================================
-# The planner computes arc distances at the robot CENTER, but the real robot
-# stops based on its encoder which measures at a WHEEL — not the center.
+# The planner computes distances at the robot CENTER in cm.  The real robot's
+# encoder + motor + braking behaviour means the actual distance traveled
+# differs from what is commanded.  These constants correct for that.
 #
-# During a turn, the outer wheel travels farther and the inner wheel travels
-# shorter than the center arc.  The ratio is:
-#   encoder_dist = center_dist × (R ± track/2) / R
-#     + for outer wheel, − for inner wheel
+# HOW TO CALIBRATE (see calibration_guide.html):
+#   1. Send each command type at 2-3 different distances
+#   2. Measure actual vs expected distance/position
+#   3. If the error is constant (same cm short every time):
+#        set OFFSET_xx = shortfall in mm  (e.g. 18 = 1.8cm)
+#   4. If the error is proportional (same % short every time):
+#        set SCALE_xx = expected / actual  (e.g. 1.035 = 3.5% short)
+#   5. If both: set both.
 #
-# HOW TO CALIBRATE:
-#   1. Command the robot to do FR with a large distance (e.g. FR1800 = 180cm)
-#   2. Measure the actual angle turned (should be ~360° for a full circle)
-#   3. Read the encoder value when the robot completes 360°
-#   4. The scale factor = encoder_reading / commanded_distance
-#   5. Put that value below for the corresponding direction
+# Formula applied:  commanded_mm = center_arc_mm * SCALE + OFFSET
 #
-# Set to 1.0 to disable correction (encoder = center arc).
-_HALF_TRACK = ROBOT_AXLE_TRACK_CM / 2.0  # 8.0cm
+# Set SCALE=1.0 and OFFSET=0 to disable correction (uncalibrated default).
 
-# Default: assume encoder on LEFT rear wheel
-#   - FR/BR (right turn): left wheel is OUTER → factor > 1
-#   - FL/BL (left turn):  left wheel is INNER → factor < 1
-ENCODER_SCALE_FL = (ROBOT_TURN_RADIUS_FL_CM - _HALF_TRACK) / ROBOT_TURN_RADIUS_FL_CM
-ENCODER_SCALE_FR = (ROBOT_TURN_RADIUS_FR_CM + _HALF_TRACK) / ROBOT_TURN_RADIUS_FR_CM
-ENCODER_SCALE_BL = (ROBOT_TURN_RADIUS_BL_CM - _HALF_TRACK) / ROBOT_TURN_RADIUS_BL_CM
-ENCODER_SCALE_BR = (ROBOT_TURN_RADIUS_BR_CM + _HALF_TRACK) / ROBOT_TURN_RADIUS_BR_CM
-# FW/BW: no correction (both wheels travel the same distance)
-ENCODER_SCALE_FW = 1.0
-ENCODER_SCALE_BW = 1.0
+SCALE_FW = 1.0;  OFFSET_FW = 0   # Forward straight
+SCALE_BW = 1.0;  OFFSET_BW = 0   # Backward straight
+SCALE_FL = 1.0;  OFFSET_FL = 0   # Forward-Left arc
+SCALE_FR = 1.0;  OFFSET_FR = 0   # Forward-Right arc
+SCALE_BL = 1.0;  OFFSET_BL = 0   # Backward-Left arc
+SCALE_BR = 1.0;  OFFSET_BR = 0   # Backward-Right arc
 
 ROBOT_SPEED_CM_S = 30.0
 ROBOT_LENGTH_CM = 30.0
@@ -86,14 +75,10 @@ SNAP_MIN_DIST_CM = 17.5
 # Maximum face-to-camera distance (beyond this, resolution is too low)
 SNAP_MAX_DIST_CM = 50.0
 
-# Pi Camera v2.1: 62.2 deg HFOV.  The face just needs to be within the
-# camera's field of view.  Since the camera always points at the face,
-# the limiting factor is how foreshortened the face becomes at extreme
-# incidence angles — but the wide FOV means we can approach from steep
-# angles and still capture the whole face.
-# Practical max incidence: ~75 deg (face is ~26% projected width, still
-# readable by the classifier for large block digits/arrows).
-SNAP_MAX_INCIDENCE_DEG = 35.0
+# Pi Camera v2.1: 62.2 deg HFOV.  With tighter approach angles (±20°),
+# the face is always well-centered in frame and clearly readable.
+# 25° max incidence gives a good balance between safety and flexibility.
+SNAP_MAX_INCIDENCE_DEG = 25.0
 
 # ============================================================================
 # 2. PIVOT-ON-BACK-LEFT-WHEEL GEOMETRY
