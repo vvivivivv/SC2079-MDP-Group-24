@@ -41,7 +41,7 @@ CAMERA_OFFSET_CM = 15.0
 
 # Approach angle offsets from the face normal (degrees).
 # With 75 deg max incidence and wide HFOV, we can approach from steep angles.
-APPROACH_ANGLES_DEG = [-35, -30, -15, 0, 15, 30, 35]
+APPROACH_ANGLES_DEG = [-30, -15, 0, 15, 30]
 
 # Safety: virtual obstacle radius
 VIRTUAL_OBS_HALF_CM = 23.0
@@ -149,7 +149,7 @@ class Obstacle(CellState):
 
         if retrying:
             distances = [15, 20, 25, 30, 40]
-            angles = [-35, -25, -15, -5, 0, 5, 15, 25, 35]
+            angles = [-30, -25, -15, -5, 0, 5, 15, 25, 30]
 
         for face_dist in distances:
             if face_dist < SNAP_MIN_DIST_CM or face_dist > SNAP_MAX_DIST_CM:

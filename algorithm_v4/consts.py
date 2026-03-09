@@ -13,7 +13,7 @@ ROBOT_WHEELBASE_CM = 20.0
 # right arcs will have different radii. Measure by driving a full circle
 # in each direction and computing R = circumference / (2*pi).
 ROBOT_TURN_RADIUS_LEFT_CM = 29.48 # FL/BL arc radius (tune this!)
-ROBOT_TURN_RADIUS_RIGHT_CM = 29.48 # FR/BR arc radius (tune this!)
+ROBOT_TURN_RADIUS_RIGHT_CM = 30.6 # FR/BR arc radius (tune this!)
 
 # Derived values used throughout the planner:
 #   MAX: conservative — used for RS direct paths & collision checking
