@@ -393,11 +393,12 @@ class Robot:
             try:
                 raw_suffix = cmd[2:]
                 if '_' in raw_suffix:
-                    dist_cm = int(raw_suffix.split('_')[1])
+                    dist_mm = float(raw_suffix.split('_')[1])
                 else:
-                    dist_cm = int(raw_suffix)
+                    dist_mm = float(raw_suffix)
 
-                self.target_val = dist_cm
+                # Convert incoming mm back to cm for internal simulator physics
+                self.target_val = dist_mm / 10.0  
                 self.state = "MOVING"
 
                 if cmd.startswith("FL"):
@@ -420,16 +421,18 @@ class Robot:
 
         # 2. STRAIGHT MOVES (FW, BW)
         elif cmd.startswith("FW"):
-            try: val = int(cmd[2:])
-            except: val = 10
-            self.target_val = val; self.state = "MOVING"
+            try: val_mm = float(cmd[2:])
+            except: val_mm = 100.0 # Default to 100mm if undefined
+            self.target_val = val_mm / 10.0
+            self.state = "MOVING"
             self.velocity = CURRENT_SPEED
             self.steering_angle = 0.0
 
         elif cmd.startswith("BW"):
-            try: val = int(cmd[2:])
-            except: val = 10
-            self.target_val = val; self.state = "MOVING"
+            try: val_mm = float(cmd[2:])
+            except: val_mm = 100.0
+            self.target_val = val_mm / 10.0
+            self.state = "MOVING"
             self.velocity = -CURRENT_SPEED
             self.steering_angle = 0.0
 

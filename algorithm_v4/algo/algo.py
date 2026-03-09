@@ -194,17 +194,11 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
 
 
 def rs_segments_to_commands(segments):
-    """Convert Reeds-Shepp segments to robot commands.
-    
-    Segment format: (type, length_cm, gear)
-      type: 'L', 'R', 'S'
-      gear: 'F' (forward), 'B' (backward)
-    
-    Maps to: FL, FR, FW, BW, BL, BR commands.
-    """
+    """Convert Reeds-Shepp segments to robot commands."""
     commands = []
     for seg_type, length_cm, gear in segments:
-        dist = max(1, round(length_cm))
+        # Multiply by 10 and round to convert cm to mm integer
+        dist = max(1, int(round(length_cm * 10))) 
         if seg_type == 'S':
             cmd = f"FW{dist}" if gear == 'F' else f"BW{dist}"
         elif seg_type == 'L':
@@ -215,7 +209,6 @@ def rs_segments_to_commands(segments):
             continue
         commands.append(cmd)
     return commands
-
 
 # =============================================================================
 # MAZE SOLVER
@@ -597,7 +590,7 @@ class MazeSolver:
 
                     if not spin_ok:
                         # Try small forward nudge (10cm) to escape
-                        for nudge_dist, nudge_cmd in [(10, "FW10"), (-10, "BW10")]:
+                        for nudge_dist, nudge_cmd in [(10, "FW100"), (-10, "BW100")]:
                             test_x = rx + nudge_dist * math.cos(rtheta)
                             test_y = ry + nudge_dist * math.sin(rtheta)
                             # Check nudge destination is valid
@@ -651,7 +644,7 @@ class MazeSolver:
                     and not cmd.startswith("FIN")):
                 try:
                     pv, cv = int(prev[2:]), int(cmd[2:])
-                    if pv + cv <= 90:
+                    if pv + cv <= 900:  # Changed limit from 90cm to 900mm
                         compressed[-1] = f"FW{pv + cv}"
                         continue
                 except ValueError:
@@ -659,7 +652,7 @@ class MazeSolver:
             elif cmd.startswith("BW") and prev.startswith("BW"):
                 try:
                     pv, cv = int(prev[2:]), int(cmd[2:])
-                    if pv + cv <= 90:
+                    if pv + cv <= 900:  # Changed limit from 90cm to 900mm
                         compressed[-1] = f"BW{pv + cv}"
                         continue
                 except ValueError:

@@ -362,16 +362,7 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
 # =============================================================================
 
 def path_to_commands(path):
-    """Convert Hybrid A* path to drive commands.
-    
-    Commands:
-      S  -> FW{dist}   forward straight
-      B  -> BW{dist}   backward straight
-      L  -> FL{dist}   full-lock left, forward
-      R  -> FR{dist}   full-lock right, forward
-      BL -> BL{dist}   full-lock left, backward
-      BR -> BR{dist}   full-lock right, backward
-    """
+    """Convert Hybrid A* path to drive commands."""
     if not path or len(path) < 2:
         return []
 
@@ -387,7 +378,8 @@ def path_to_commands(path):
 
     commands = []
     for move_type, count in segments:
-        dist = round(STEP_SIZE_CM * count)
+        # Multiply by 10 and round to convert cm to mm integer
+        dist = int(round(STEP_SIZE_CM * count * 10)) 
         if move_type == 'S':
             commands.append(f"FW{dist}")
         elif move_type == 'B':
