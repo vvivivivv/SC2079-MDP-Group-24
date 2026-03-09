@@ -206,17 +206,6 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
 
 
 def rs_segments_to_commands(segments):
-    """Convert Reeds-Shepp segments to robot commands.
-
-    Segment format: (type, length_cm, gear)
-      type: 'L', 'R', 'S'
-      gear: 'F' (forward), 'B' (backward)
-
-    Maps to: FL, FR, FW, BW, BL, BR commands (distances in mm).
-    Arc distances are scaled by encoder correction factors so the
-    robot's encoder-based stopping matches the planned center arc.
-    """
-    # Encoder scale: maps (seg_type, gear) -> (command_prefix, scale_factor)
     _CMD_MAP = {
         ('S', 'F'): ('FW', ENCODER_SCALE_FW),
         ('S', 'B'): ('BW', ENCODER_SCALE_BW),
@@ -234,9 +223,6 @@ def rs_segments_to_commands(segments):
         prefix, scale = entry
         dist_mm = max(10, round(length_cm * scale * 10))
         commands.append(f"{prefix}{dist_mm}")
-        else:
-            continue
-        commands.append(cmd)
     return commands
 
 
