@@ -512,11 +512,11 @@ class MazeSolver:
                     leg_ok = True
                     print(f"  Leg {i}: A* heading, {iters} iters, {len(path)} steps")
 
-            # --- ATTEMPT 3: A* position-only (relaxed) ---
+            # --- ATTEMPT 3: A* position-only ---
             if not leg_ok:
                 path, iters = hybrid_astar_search(
                     start_pose, goal_xy, obs_expanded,
-                    goal_tolerance_cm=12.0,
+                    goal_tolerance_cm=5.0,
                     position_only=True,
                     skip_obstacle_indices=skip_indices)
 
@@ -526,6 +526,21 @@ class MazeSolver:
                     current_pose = (end[0], end[1], _norm_theta(end[2]))
                     leg_ok = True
                     print(f"  Leg {i}: A* pos-only, {iters} iters, {len(path)} steps")
+
+            # --- ATTEMPT 4: A* relaxed tolerance ---
+            if not leg_ok:
+                path, iters = hybrid_astar_search(
+                    start_pose, goal_xy, obs_expanded,
+                    goal_tolerance_cm=15.0,
+                    position_only=True,
+                    skip_obstacle_indices=skip_indices)
+
+                if path:
+                    leg_commands = path_to_commands(path)
+                    end = path[-1]
+                    current_pose = (end[0], end[1], _norm_theta(end[2]))
+                    leg_ok = True
+                    print(f"  Leg {i}: A* relaxed, {iters} iters")
 
             if not leg_ok:
                 print(f"  Leg {i}: SKIPPED (no path found)")
