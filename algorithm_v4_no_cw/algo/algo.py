@@ -204,22 +204,22 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
 
 def rs_segments_to_commands(segments):
     """Convert Reeds-Shepp segments to robot commands.
-    
+
     Segment format: (type, length_cm, gear)
       type: 'L', 'R', 'S'
       gear: 'F' (forward), 'B' (backward)
-    
-    Maps to: FL, FR, FW, BW, BL, BR commands.
+
+    Maps to: FL, FR, FW, BW, BL, BR commands (distances in mm).
     """
     commands = []
     for seg_type, length_cm, gear in segments:
-        dist = max(1, round(length_cm))
+        dist_mm = max(10, round(length_cm * 10))
         if seg_type == 'S':
-            cmd = f"FW{dist}" if gear == 'F' else f"BW{dist}"
+            cmd = f"FW{dist_mm}" if gear == 'F' else f"BW{dist_mm}"
         elif seg_type == 'L':
-            cmd = f"FL{dist}" if gear == 'F' else f"BR{dist}"
+            cmd = f"FL{dist_mm}" if gear == 'F' else f"BR{dist_mm}"
         elif seg_type == 'R':
-            cmd = f"FR{dist}" if gear == 'F' else f"BL{dist}"
+            cmd = f"FR{dist_mm}" if gear == 'F' else f"BL{dist_mm}"
         else:
             continue
         commands.append(cmd)
@@ -564,7 +564,7 @@ class MazeSolver:
 
     @staticmethod
     def _compress_commands(commands):
-        """Merge consecutive FW/BW commands."""
+        """Merge consecutive FW/BW commands (distances in mm)."""
         if not commands:
             return commands
         compressed = [commands[0]]
@@ -575,7 +575,7 @@ class MazeSolver:
                     and not cmd.startswith("FIN")):
                 try:
                     pv, cv = int(prev[2:]), int(cmd[2:])
-                    if pv + cv <= 90:
+                    if pv + cv <= 900:
                         compressed[-1] = f"FW{pv + cv}"
                         continue
                 except ValueError:
@@ -583,7 +583,7 @@ class MazeSolver:
             elif cmd.startswith("BW") and prev.startswith("BW"):
                 try:
                     pv, cv = int(prev[2:]), int(cmd[2:])
-                    if pv + cv <= 90:
+                    if pv + cv <= 900:
                         compressed[-1] = f"BW{pv + cv}"
                         continue
                 except ValueError:

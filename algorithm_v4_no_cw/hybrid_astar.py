@@ -385,15 +385,15 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
 # =============================================================================
 
 def path_to_commands(path):
-    """Convert Hybrid A* path to drive commands.
-    
+    """Convert Hybrid A* path to drive commands (distances in mm).
+
     Commands:
-      S  -> FW{dist}   forward straight
-      B  -> BW{dist}   backward straight
-      L  -> FL{dist}   full-lock left, forward
-      R  -> FR{dist}   full-lock right, forward
-      BL -> BL{dist}   full-lock left, backward
-      BR -> BR{dist}   full-lock right, backward
+      S  -> FW{dist_mm}   forward straight
+      B  -> BW{dist_mm}   backward straight
+      L  -> FL{dist_mm}   full-lock left, forward
+      R  -> FR{dist_mm}   full-lock right, forward
+      BL -> BL{dist_mm}   full-lock left, backward
+      BR -> BR{dist_mm}   full-lock right, backward
     """
     if not path or len(path) < 2:
         return []
@@ -410,19 +410,19 @@ def path_to_commands(path):
 
     commands = []
     for move_type, count in segments:
-        dist = round(STEP_SIZE_CM * count)
+        dist_mm = round(STEP_SIZE_CM * count * 10)
         if move_type == 'S':
-            commands.append(f"FW{dist}")
+            commands.append(f"FW{dist_mm}")
         elif move_type == 'B':
-            commands.append(f"BW{dist}")
+            commands.append(f"BW{dist_mm}")
         elif move_type == 'L':
-            commands.append(f"FL{dist}")
+            commands.append(f"FL{dist_mm}")
         elif move_type == 'R':
-            commands.append(f"FR{dist}")
+            commands.append(f"FR{dist_mm}")
         elif move_type == 'BR':
-            commands.append(f"BR{dist}")
+            commands.append(f"BR{dist_mm}")
         elif move_type == 'BL':
-            commands.append(f"BL{dist}")
+            commands.append(f"BL{dist_mm}")
 
     return commands
 

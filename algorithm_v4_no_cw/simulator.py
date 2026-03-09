@@ -391,16 +391,16 @@ class Robot:
         req_steering_bl = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BL_CM)
         req_steering_br = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BR_CM)
 
-        # 1. ARC MOVES (FL, FR, BL, BR)
+        # 1. ARC MOVES (FL, FR, BL, BR) — distances arrive in mm
         if cmd[:2] in ["FR", "FL", "BR", "BL"]:
             try:
                 raw_suffix = cmd[2:]
                 if '_' in raw_suffix:
-                    dist_cm = int(raw_suffix.split('_')[1])
+                    dist_mm = int(raw_suffix.split('_')[1])
                 else:
-                    dist_cm = int(raw_suffix)
+                    dist_mm = int(raw_suffix)
 
-                self.target_val = dist_cm
+                self.target_val = dist_mm / 10.0  # mm → cm
                 self.state = "MOVING"
 
                 if cmd.startswith("FL"):
@@ -421,18 +421,18 @@ class Robot:
                 self.state = "IDLE"; self.current_cmd_idx += 1
             return
 
-        # 2. STRAIGHT MOVES (FW, BW)
+        # 2. STRAIGHT MOVES (FW, BW) — distances arrive in mm
         elif cmd.startswith("FW"):
-            try: val = int(cmd[2:])
-            except: val = 10
-            self.target_val = val; self.state = "MOVING"
+            try: val_mm = int(cmd[2:])
+            except: val_mm = 100
+            self.target_val = val_mm / 10.0; self.state = "MOVING"  # mm → cm
             self.velocity = CURRENT_SPEED
             self.steering_angle = 0.0
 
         elif cmd.startswith("BW"):
-            try: val = int(cmd[2:])
-            except: val = 10
-            self.target_val = val; self.state = "MOVING"
+            try: val_mm = int(cmd[2:])
+            except: val_mm = 100
+            self.target_val = val_mm / 10.0; self.state = "MOVING"  # mm → cm
             self.velocity = -CURRENT_SPEED
             self.steering_angle = 0.0
 
