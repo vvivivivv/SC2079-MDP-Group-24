@@ -10,7 +10,10 @@ from consts import (
     ROBOT_SPEED_CM_S, ROBOT_AXLE_TRACK_CM, ROBOT_TURN_RADIUS_CM,
     ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
     ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM,
-    ROBOT_WHEELBASE_CM, PIVOT_OFFSET_X, PIVOT_OFFSET_Y
+    ROBOT_WHEELBASE_CM, PIVOT_OFFSET_X, PIVOT_OFFSET_Y,
+    ENCODER_SCALE_FL, ENCODER_SCALE_FR,
+    ENCODER_SCALE_BL, ENCODER_SCALE_BR,
+    ENCODER_SCALE_FW, ENCODER_SCALE_BW
 )
 
 # =============================================================================
@@ -391,7 +394,8 @@ class Robot:
         req_steering_bl = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BL_CM)
         req_steering_br = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BR_CM)
 
-        # 1. ARC MOVES (FL, FR, BL, BR) — distances arrive in mm
+        # 1. ARC MOVES (FL, FR, BL, BR) — distances arrive in mm (encoder-scaled)
+        #    Simulator uses center-arc physics, so undo the encoder scaling.
         if cmd[:2] in ["FR", "FL", "BR", "BL"]:
             try:
                 raw_suffix = cmd[2:]
@@ -400,28 +404,32 @@ class Robot:
                 else:
                     dist_mm = int(raw_suffix)
 
-                self.target_val = dist_mm / 10.0  # mm → cm
-                self.state = "MOVING"
-
+                # Undo encoder scaling: encoder_mm → center_arc_cm
                 if cmd.startswith("FL"):
+                    self.target_val = (dist_mm / ENCODER_SCALE_FL) / 10.0
                     self.velocity = CURRENT_SPEED
                     self.steering_angle = req_steering_fl
                 elif cmd.startswith("FR"):
+                    self.target_val = (dist_mm / ENCODER_SCALE_FR) / 10.0
                     self.velocity = CURRENT_SPEED
                     self.steering_angle = -req_steering_fr
                 elif cmd.startswith("BL"):
+                    self.target_val = (dist_mm / ENCODER_SCALE_BL) / 10.0
                     self.velocity = -CURRENT_SPEED
                     self.steering_angle = -req_steering_bl
                 elif cmd.startswith("BR"):
+                    self.target_val = (dist_mm / ENCODER_SCALE_BR) / 10.0
                     self.velocity = -CURRENT_SPEED
                     self.steering_angle = req_steering_br
+
+                self.state = "MOVING"
 
             except ValueError:
                 print(f"Error parsing command: {cmd}")
                 self.state = "IDLE"; self.current_cmd_idx += 1
             return
 
-        # 2. STRAIGHT MOVES (FW, BW) — distances arrive in mm
+        # 2. STRAIGHT MOVES (FW, BW) — distances arrive in mm (no encoder scaling)
         elif cmd.startswith("FW"):
             try: val_mm = int(cmd[2:])
             except: val_mm = 100

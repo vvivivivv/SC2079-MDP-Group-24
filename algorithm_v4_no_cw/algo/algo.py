@@ -39,7 +39,10 @@ from consts import (
     ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM,
     ROBOT_TURN_RADIUS_MAX_CM, ROBOT_TURN_RADIUS_MIN_CM,
     ROBOT_SPEED_CM_S,
-    ROBOT_WHEELBASE_CM
+    ROBOT_WHEELBASE_CM,
+    ENCODER_SCALE_FL, ENCODER_SCALE_FR,
+    ENCODER_SCALE_BL, ENCODER_SCALE_BR,
+    ENCODER_SCALE_FW, ENCODER_SCALE_BW
 )
 from python_tsp.exact import solve_tsp_dynamic_programming
 from reeds_shepp import (
@@ -210,16 +213,27 @@ def rs_segments_to_commands(segments):
       gear: 'F' (forward), 'B' (backward)
 
     Maps to: FL, FR, FW, BW, BL, BR commands (distances in mm).
+    Arc distances are scaled by encoder correction factors so the
+    robot's encoder-based stopping matches the planned center arc.
     """
+    # Encoder scale: maps (seg_type, gear) -> (command_prefix, scale_factor)
+    _CMD_MAP = {
+        ('S', 'F'): ('FW', ENCODER_SCALE_FW),
+        ('S', 'B'): ('BW', ENCODER_SCALE_BW),
+        ('L', 'F'): ('FL', ENCODER_SCALE_FL),
+        ('L', 'B'): ('BR', ENCODER_SCALE_BR),
+        ('R', 'F'): ('FR', ENCODER_SCALE_FR),
+        ('R', 'B'): ('BL', ENCODER_SCALE_BL),
+    }
+
     commands = []
     for seg_type, length_cm, gear in segments:
-        dist_mm = max(10, round(length_cm * 10))
-        if seg_type == 'S':
-            cmd = f"FW{dist_mm}" if gear == 'F' else f"BW{dist_mm}"
-        elif seg_type == 'L':
-            cmd = f"FL{dist_mm}" if gear == 'F' else f"BR{dist_mm}"
-        elif seg_type == 'R':
-            cmd = f"FR{dist_mm}" if gear == 'F' else f"BL{dist_mm}"
+        entry = _CMD_MAP.get((seg_type, gear))
+        if entry is None:
+            continue
+        prefix, scale = entry
+        dist_mm = max(10, round(length_cm * scale * 10))
+        commands.append(f"{prefix}{dist_mm}")
         else:
             continue
         commands.append(cmd)
