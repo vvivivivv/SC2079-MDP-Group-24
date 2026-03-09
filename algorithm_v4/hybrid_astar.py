@@ -56,7 +56,10 @@ REVERSE_PENALTY = 1.2
 DIRECTION_CHANGE_PENALTY = 8.0
 
 # Obstacle clearance
-OBSTACLE_RADIUS_CM = 28.0
+# 32cm = 20cm (virtual obs half-width) + 12cm buffer.
+# The robot corner is ~21cm from center, so this gives ~11cm physical gap.
+# Previous value of 28cm left only ~8cm — too tight with wheel drift.
+OBSTACLE_RADIUS_CM = 32.0
 
 # Arc collision check resolution
 ARC_CHECK_POINTS = 10
@@ -271,7 +274,7 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     gt = goal[2] if len(goal) > 2 and not position_only else st
 
     # Reduce radius for nearby obstacles (start, goal, or post-spin drift)
-    CAPTURE_CLEARANCE = 22.0
+    CAPTURE_CLEARANCE = 25.0
     skip_set = set()
     if skip_obstacle_indices:
         skip_set = set(skip_obstacle_indices)

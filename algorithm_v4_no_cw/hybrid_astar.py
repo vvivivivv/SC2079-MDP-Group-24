@@ -59,11 +59,9 @@ MAX_ITERATIONS = 200000
 REVERSE_PENALTY = 1.2
 DIRECTION_CHANGE_PENALTY = 8.0
 
-# Obstacle clearance
-OBSTACLE_RADIUS_CM = 28.0
-
-# Arc collision check resolution
-ARC_CHECK_POINTS = 10
+# Obstacle clearance — robot half-diagonal is ~21cm, plus safety margin.
+# 33cm keeps the robot body ≥12cm from any obstacle edge during transit.
+OBSTACLE_RADIUS_CM = 33.0
 
 
 # =============================================================================
@@ -91,38 +89,15 @@ def _point_hits_obstacle(px, py, obstacles):
             return True
     return False
 
-def _check_line_collision(x0, y0, x1, y1, obstacles):
-    for i in range(ARC_CHECK_POINTS + 1):
-        t = i / ARC_CHECK_POINTS
-        px = x0 + t * (x1 - x0)
-        py = y0 + t * (y1 - y0)
-        if not _in_arena(px, py):
-            return True
-        if _point_hits_obstacle(px, py, obstacles):
-            return True
-    return False
-
-def _check_arc_collision(x0, y0, theta0, arc_angle, turn_radius, direction, obstacles):
-    sign = 1 if direction == 'L' else -1
-    cx = x0 - sign * turn_radius * math.sin(theta0)
-    cy = y0 + sign * turn_radius * math.cos(theta0)
-    start_a = math.atan2(y0 - cy, x0 - cx)
-
-    for i in range(ARC_CHECK_POINTS + 1):
-        t = i / ARC_CHECK_POINTS
-        a = start_a + sign * arc_angle * t
-        px = cx + turn_radius * math.cos(a)
-        py = cy + turn_radius * math.sin(a)
-        if not _in_arena(px, py):
-            return True
-        if _point_hits_obstacle(px, py, obstacles):
-            return True
-    return False
-
-
 # =============================================================================
 # PRECOMPUTED EULER DELTAS — BICYCLE MODEL (matches simulator)
 # =============================================================================
+# We now store the full intermediate trajectory (in local frame) for each
+# motion primitive so collision checks use the EXACT same bicycle-model
+# path the simulator will execute.  This replaces the old idealized
+# circular-arc collision check that could diverge by several cm.
+
+_ARC_COLLISION_POINTS = 10   # How many intermediate samples per primitive
 
 def _precompute_euler_deltas():
     """Precompute with INDEPENDENT FL/FR/BL/BR turning radii.
@@ -130,6 +105,12 @@ def _precompute_euler_deltas():
     Naming: "BL" = front of car swings LEFT while reversing.
       BL = right steering + backward gear  (front swings left)
       BR = left steering  + backward gear  (front swings right)
+
+    Each primitive stores:
+      (dx, dy, dtheta, trajectory_points)
+    where trajectory_points is a list of (lx, ly) in the LOCAL frame
+    (robot starts at origin heading along +x).  The caller rotates these
+    into world frame for collision checking.
     """
     L = ROBOT_WHEELBASE_CM
     speed = ROBOT_SPEED_CM_S
@@ -143,34 +124,71 @@ def _precompute_euler_deltas():
 
     deltas = {}
     primitives = [
-        # (name, velocity, steering_angle, radius_for_collision)
-        ('S',   speed,  0.0,        None),
-        ('L',   speed,  delta_fl,   TURN_RADIUS_FL_CM),    # FL: forward, steer left
-        ('R',   speed, -delta_fr,   TURN_RADIUS_FR_CM),    # FR: forward, steer right
-        ('B',  -speed,  0.0,        None),
-        ('BL', -speed, -delta_bl,   TURN_RADIUS_BL_CM),    # BL: backward, right steer → front swings left
-        ('BR', -speed,  delta_br,   TURN_RADIUS_BR_CM),    # BR: backward, left steer → front swings right
+        # (name, velocity, steering_angle)
+        ('S',   speed,  0.0),
+        ('L',   speed,  delta_fl),     # FL: forward, steer left
+        ('R',   speed, -delta_fr),     # FR: forward, steer right
+        ('B',  -speed,  0.0),
+        ('BL', -speed, -delta_bl),     # BL: backward, right steer → front swings left
+        ('BR', -speed,  delta_br),     # BR: backward, left steer → front swings right
     ]
 
-    for name, v, delta, radius in primitives:
+    for name, v, delta in primitives:
         x, y, t = 0.0, 0.0, 0.0
         traveled = 0.0
         omega = (v / L) * math.tan(delta) if abs(delta) > 1e-9 else 0.0
+
+        # Collect intermediate points at even intervals for collision checks
+        traj_points = [(0.0, 0.0)]
+        total_ticks = 0
+        # First pass: count total ticks
+        tmp_traveled = 0.0
+        while tmp_traveled < step:
+            tmp_traveled += abs(v * dt)
+            total_ticks += 1
+        # Interval between samples
+        sample_interval = max(1, total_ticks // _ARC_COLLISION_POINTS)
+
+        tick = 0
         while traveled < step:
             x += v * math.cos(t) * dt
             y += v * math.sin(t) * dt
             t += omega * dt
             traveled += abs(v * dt)
-        deltas[name] = (x, y, t, radius)
+            tick += 1
+            if tick % sample_interval == 0:
+                traj_points.append((x, y))
+
+        # Always include the endpoint
+        traj_points.append((x, y))
+        deltas[name] = (x, y, t, traj_points)
 
     return deltas
 
 _EULER_DELTAS = _precompute_euler_deltas()
 
 
+def _check_trajectory_collision(x0, y0, theta0, local_points, obstacles):
+    """Check collision along precomputed bicycle-model trajectory points.
+    
+    local_points are in the robot's local frame (heading = +x at origin).
+    We rotate them into world frame using (x0, y0, theta0).
+    """
+    cos_t = math.cos(theta0)
+    sin_t = math.sin(theta0)
+    for lx, ly in local_points:
+        px = x0 + lx * cos_t - ly * sin_t
+        py = y0 + lx * sin_t + ly * cos_t
+        if not _in_arena(px, py):
+            return True
+        if _point_hits_obstacle(px, py, obstacles):
+            return True
+    return False
+
+
 def _get_successors(x, y, theta, obstacles, prev_move=None):
     results = []
-    for move, (dx, dy, dt, move_radius) in _EULER_DELTAS.items():
+    for move, (dx, dy, dt, traj_points) in _EULER_DELTAS.items():
         cos_t = math.cos(theta)
         sin_t = math.sin(theta)
         nx = x + dx * cos_t - dy * sin_t
@@ -180,15 +198,9 @@ def _get_successors(x, y, theta, obstacles, prev_move=None):
         if not _in_arena(nx, ny):
             continue
 
-        if move in ('S', 'B'):
-            if _check_line_collision(x, y, nx, ny, obstacles):
-                continue
-        else:
-            arc_angle = abs(dt)
-            direction = 'L' if move in ('L', 'BR') else 'R'
-            radius = move_radius if move_radius else TURN_RADIUS_CM
-            if _check_arc_collision(x, y, theta, arc_angle, radius, direction, obstacles):
-                continue
+        # Collision check using the ACTUAL bicycle-model trajectory
+        if _check_trajectory_collision(x, y, theta, traj_points, obstacles):
+            continue
 
         is_reverse = move in ('B', 'BL', 'BR')
         cost = STEP_SIZE_CM * (REVERSE_PENALTY if is_reverse else 1.0)
@@ -283,7 +295,7 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     gt = goal[2] if len(goal) > 2 and not position_only else st
 
     # Reduce radius for nearby obstacles (start, goal, or post-spin drift)
-    CAPTURE_CLEARANCE = 22.0
+    CAPTURE_CLEARANCE = 25.0
     skip_set = set()
     if skip_obstacle_indices:
         skip_set = set(skip_obstacle_indices)

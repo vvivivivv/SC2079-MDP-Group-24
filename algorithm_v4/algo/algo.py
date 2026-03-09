@@ -168,7 +168,7 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
     """
     ARENA = 200.0
     CLEARANCE = 15.0
-    CAPTURE_CLEARANCE = 22.0
+    CAPTURE_CLEARANCE = 25.0
 
     result = get_optimal_path_segments(start, end, radius)
     if result is None:
@@ -475,24 +475,19 @@ class MazeSolver:
             leg_ok = False
             goal_xy = (goal_pose[0], goal_pose[1], goal_pose[2])
 
-            # Find ALL obstacles whose virtual zone overlaps the start or
-            # goal position. After a large CW pivot spin, the robot center
-            # can drift into a nearby obstacle's zone — we must relax those
-            # radii so A* can still find a path out.
-            nearby_start = set()
-            nearby_goal = set()
-            for oi, (oox, ooy, oor) in enumerate(obs_expanded):
-                ds = math.sqrt((start_pose[0]-oox)**2 + (start_pose[1]-ooy)**2)
-                dg = math.sqrt((goal_pose[0]-oox)**2 + (goal_pose[1]-ooy)**2)
-                if ds < oor + 2:
-                    nearby_start.add(oi)
-                if dg < oor + 2:
-                    nearby_goal.add(oi)
+            # Only relax the specific obstacle being photographed at
+            # the start or goal of this leg.  Previously we relaxed ALL
+            # nearby obstacles, which could shrink the safety zone of an
+            # obstacle the robot merely passes by (e.g. obstacle 1 when
+            # travelling between other waypoints), causing near-collisions.
+            #
+            # If the robot drifts into an obstacle zone after a CW spin,
+            # the start_ob_idx relaxation is enough to let A* escape.
+            skip_indices = set()
             if start_ob_idx is not None:
-                nearby_start.add(start_ob_idx)
+                skip_indices.add(start_ob_idx)
             if goal_ob_idx is not None:
-                nearby_goal.add(goal_ob_idx)
-            skip_indices = nearby_start | nearby_goal
+                skip_indices.add(goal_ob_idx)
 
             # --- ATTEMPT 1: Direct Reeds-Shepp path ---
             is_clear, segments, rs_len = check_rs_path_collision(

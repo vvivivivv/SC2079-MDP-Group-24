@@ -44,7 +44,7 @@ CAMERA_OFFSET_CM = 15.0
 APPROACH_ANGLES_DEG = [-35, -30, -15, 0, 15, 30, 35]
 
 # Safety: virtual obstacle radius
-VIRTUAL_OBS_HALF_CM = 21.0
+VIRTUAL_OBS_HALF_CM = 23.0
 
 # Penalty weights (lower = preferred)
 PENALTY_CENTER = 0
@@ -301,7 +301,7 @@ class Grid:
                     dist = math.sqrt((robot_cx - other_cx)**2 +
                                      (robot_cy - other_cy)**2)
 
-                    if dist < VIRTUAL_OBS_HALF_CM + 5:
+                    if dist < VIRTUAL_OBS_HALF_CM + 9:
                         blocked = True
                         break
 

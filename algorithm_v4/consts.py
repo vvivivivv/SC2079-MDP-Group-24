@@ -12,8 +12,8 @@ ROBOT_WHEELBASE_CM = 20.0
 # Due to wear, motor differences, weight distribution, etc., left and
 # right arcs will have different radii. Measure by driving a full circle
 # in each direction and computing R = circumference / (2*pi).
-ROBOT_TURN_RADIUS_LEFT_CM = 24.3 # FL/BL arc radius (tune this!)
-ROBOT_TURN_RADIUS_RIGHT_CM = 24.2  # FR/BR arc radius (tune this!)
+ROBOT_TURN_RADIUS_LEFT_CM = 29.48 # FL/BL arc radius (tune this!)
+ROBOT_TURN_RADIUS_RIGHT_CM = 29.48  # FR/BR arc radius (tune this!)
 
 # Derived values used throughout the planner:
 #   MAX: conservative — used for RS direct paths & collision checking
@@ -35,7 +35,7 @@ ROBOT_RADIUS_CM = math.sqrt((ROBOT_LENGTH_CM/2)**2 + (ROBOT_WIDTH_CM/2)**2)
 # ============================================================================
 # Minimum face-to-camera distance for a readable image.
 # Below this the face is too close / blurry / partially out of frame.
-SNAP_MIN_DIST_CM = 15.0
+SNAP_MIN_DIST_CM = 17.5
 
 # Maximum face-to-camera distance (beyond this, resolution is too low)
 SNAP_MAX_DIST_CM = 50.0
