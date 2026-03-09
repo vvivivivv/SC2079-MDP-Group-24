@@ -498,14 +498,14 @@ class MazeSolver:
             if cmd.startswith("FW") and prev.startswith("FW"):
                 try:
                     pv, cv = int(prev[2:]), int(cmd[2:])
-                    if pv + cv <= 90:
+                    if pv + cv <= 900: # Changed from 90 to 900 mm
                         compressed[-1] = f"FW{pv + cv}"
                         continue
                 except ValueError: pass
             elif cmd.startswith("BW") and prev.startswith("BW"):
                 try:
                     pv, cv = int(prev[2:]), int(cmd[2:])
-                    if pv + cv <= 90:
+                    if pv + cv <= 900: # Changed from 90 to 900 mm
                         compressed[-1] = f"BW{pv + cv}"
                         continue
                 except ValueError: pass
