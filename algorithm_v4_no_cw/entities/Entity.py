@@ -248,8 +248,26 @@ class Obstacle(CellState):
 
         cells.sort(key=lambda c: c.penalty)
 
-        # More candidates (wider angles), but cap for TSP
-        MAX_CANDIDATES = 15
+        # Spatial de-duplication: prune candidates within 5cm + 10deg
+        # of a lower-penalty one (they're functionally interchangeable
+        # given real-world positioning error).
+        pruned = []
+        for c in cells:
+            dominated = False
+            cx_cm, cy_cm = c.x * 10, c.y * 10
+            for p in pruned:
+                px_cm, py_cm = p.x * 10, p.y * 10
+                dist = math.sqrt((cx_cm - px_cm)**2 + (cy_cm - py_cm)**2)
+                hdiff = abs((c.theta_rad - p.theta_rad + math.pi) % (2 * math.pi) - math.pi)
+                if dist < 5.0 and hdiff < math.radians(10):
+                    dominated = True
+                    break
+            if not dominated:
+                pruned.append(c)
+        cells = pruned
+
+        # Cap for TSP cost matrix size
+        MAX_CANDIDATES = 10
         if len(cells) > MAX_CANDIDATES:
             cells = cells[:MAX_CANDIDATES]
 

@@ -97,7 +97,7 @@ def _point_hits_obstacle(px, py, obstacles):
 # path the simulator will execute.  This replaces the old idealized
 # circular-arc collision check that could diverge by several cm.
 
-_ARC_COLLISION_POINTS = 10   # How many intermediate samples per primitive
+_ARC_COLLISION_POINTS = 4    # Samples per 8cm step (~2cm spacing; sufficient for 33cm obstacle zones)
 
 def _precompute_euler_deltas():
     """Precompute with INDEPENDENT FL/FR/BL/BR turning radii.
@@ -264,7 +264,8 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
                         position_only=False,
                         start_obstacle_idx=None,
                         goal_obstacle_idx=None,
-                        skip_obstacle_indices=None):
+                        skip_obstacle_indices=None,
+                        max_iterations=None):
     """Find path from start pose to goal pose.
     
     PRIMARY MODE (position_only=False):
@@ -319,23 +320,24 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     sk = _grid_key(sx, sy, st)
     g_cost[sk] = 0
 
-    # Use heading-aware Euclidean when goal heading is known (cheap but effective)
+    # Use Reeds-Shepp heuristic when goal heading is known (tight, admissible)
     if not position_only:
-        h_start = _h_euclidean_with_heading(sx, sy, st, gx, gy, gt)
+        h_start = _h_reeds_shepp(sx, sy, st, gx, gy, gt)
     else:
         h_start = _h_euclidean(sx, sy, gx, gy)
 
     heapq.heappush(open_set, (h_start, counter, sx, sy, st, None))
 
+    max_iter = max_iterations if max_iterations is not None else MAX_ITERATIONS
     iterations = 0
-    while open_set and iterations < MAX_ITERATIONS:
+    while open_set and iterations < max_iter:
         iterations += 1
         f, _, cx, cy, ct, prev_move = heapq.heappop(open_set)
         ck = _grid_key(cx, cy, ct)
 
         cur_g = g_cost.get(ck, float('inf'))
         if not position_only:
-            h_cur = _h_euclidean_with_heading(cx, cy, ct, gx, gy, gt)
+            h_cur = _h_reeds_shepp(cx, cy, ct, gx, gy, gt)
         else:
             h_cur = _h_euclidean(cx, cy, gx, gy)
 
@@ -370,7 +372,7 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
                 parent[nk] = (ck, move, cx, cy, ct)
                 counter += 1
                 if not position_only:
-                    h = _h_euclidean_with_heading(nx, ny, nt, gx, gy, gt)
+                    h = _h_reeds_shepp(nx, ny, nt, gx, gy, gt)
                 else:
                     h = _h_euclidean(nx, ny, gx, gy)
                 heapq.heappush(open_set, (new_g + h, counter, nx, ny, nt, move))

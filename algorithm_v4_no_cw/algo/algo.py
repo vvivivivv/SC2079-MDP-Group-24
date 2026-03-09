@@ -91,6 +91,7 @@ def _euler_simulate_segments(start, segments):
 
     x, y, theta = start
     points = [(x, y)]
+    SAMPLE_EVERY_CM = 3.0  # Subsample for collision checking (obstacles are 33cm radius)
 
     for seg_type, length_cm, gear in segments:
         if length_cm < 0.5:
@@ -101,14 +102,19 @@ def _euler_simulate_segments(start, segments):
         omega = (v / L) * math.tan(delta) if abs(delta) > 1e-9 else 0.0
 
         traveled = 0.0
+        since_last_sample = 0.0
         while traveled < dist_cm:
             x += v * math.cos(theta) * dt
             y += v * math.sin(theta) * dt
             theta += omega * dt
-            traveled += abs(v * dt)
-            points.append((x, y))
+            step = abs(v * dt)
+            traveled += step
+            since_last_sample += step
+            if since_last_sample >= SAMPLE_EVERY_CM:
+                points.append((x, y))
+                since_last_sample = 0.0
 
-        points.append((x, y))
+        points.append((x, y))  # always include segment endpoint
 
     return points, (x, y, theta)
 
@@ -232,6 +238,7 @@ class MazeSolver:
         self.size_x = size_x
         self.size_y = size_y
         self.obstacle_centers = []
+        self._rs_cache = {}
 
     def add_obstacle(self, x, y, direction: Direction, obstacle_id: int):
         obstacle = Obstacle(x, y, direction, obstacle_id)
@@ -266,16 +273,25 @@ class MazeSolver:
     # REEDS-SHEPP TSP COST MATRIX
     # =================================================================
 
+    _AVG_RADIUS = (ROBOT_TURN_RADIUS_FL_CM + ROBOT_TURN_RADIUS_FR_CM +
+                   ROBOT_TURN_RADIUS_BL_CM + ROBOT_TURN_RADIUS_BR_CM) / 4.0
+
     def _rs_travel_cost(self, pose_a, pose_b):
-        """Reeds-Shepp path length between two poses.
-        
+        """Reeds-Shepp path length between two poses (cached).
+
         Uses the average turning radius for cost estimation, since the
         actual path will use a mix of FL/FR/BL/BR arcs with different
         radii.  This gives more accurate TSP ordering than using MAX.
         """
-        avg_radius = (ROBOT_TURN_RADIUS_FL_CM + ROBOT_TURN_RADIUS_FR_CM +
-                      ROBOT_TURN_RADIUS_BL_CM + ROBOT_TURN_RADIUS_BR_CM) / 4.0
-        return get_optimal_path_length(pose_a, pose_b, avg_radius)
+        # Quantize to 1mm / 0.1deg to collapse near-identical poses
+        key = (round(pose_a[0], 1), round(pose_a[1], 1), round(pose_a[2], 3),
+               round(pose_b[0], 1), round(pose_b[1], 1), round(pose_b[2], 3))
+        cached = self._rs_cache.get(key)
+        if cached is not None:
+            return cached
+        cost = get_optimal_path_length(pose_a, pose_b, self._AVG_RADIUS)
+        self._rs_cache[key] = cost
+        return cost
 
     # =================================================================
     # VISIT ORDER (TSP)
@@ -479,14 +495,15 @@ class MazeSolver:
                 print(f"  Leg {i}: RS direct, {rs_len:.0f}cm, "
                       f"{len(segments)} segments")
 
-            # --- ATTEMPT 2: A* heading-constrained (Euclidean+heading heuristic) ---
+            # --- ATTEMPT 2: A* heading-constrained (budget-limited) ---
             if not leg_ok:
                 path, iters = hybrid_astar_search(
                     start_pose, goal_xy, obs_expanded,
                     goal_tolerance_cm=8.0,
                     heading_tolerance_rad=0.35,  # ~20 deg (within camera half-FOV of 31 deg)
                     position_only=False,
-                    skip_obstacle_indices=skip_indices)
+                    skip_obstacle_indices=skip_indices,
+                    max_iterations=50000)
 
                 if path:
                     leg_commands = path_to_commands(path)
@@ -495,11 +512,11 @@ class MazeSolver:
                     leg_ok = True
                     print(f"  Leg {i}: A* heading, {iters} iters, {len(path)} steps")
 
-            # --- ATTEMPT 3: A* position-only ---
+            # --- ATTEMPT 3: A* position-only (relaxed) ---
             if not leg_ok:
                 path, iters = hybrid_astar_search(
                     start_pose, goal_xy, obs_expanded,
-                    goal_tolerance_cm=5.0,
+                    goal_tolerance_cm=12.0,
                     position_only=True,
                     skip_obstacle_indices=skip_indices)
 
@@ -509,21 +526,6 @@ class MazeSolver:
                     current_pose = (end[0], end[1], _norm_theta(end[2]))
                     leg_ok = True
                     print(f"  Leg {i}: A* pos-only, {iters} iters, {len(path)} steps")
-
-            # --- ATTEMPT 4: A* relaxed tolerance ---
-            if not leg_ok:
-                path, iters = hybrid_astar_search(
-                    start_pose, goal_xy, obs_expanded,
-                    goal_tolerance_cm=15.0,
-                    position_only=True,
-                    skip_obstacle_indices=skip_indices)
-
-                if path:
-                    leg_commands = path_to_commands(path)
-                    end = path[-1]
-                    current_pose = (end[0], end[1], _norm_theta(end[2]))
-                    leg_ok = True
-                    print(f"  Leg {i}: A* relaxed, {iters} iters")
 
             if not leg_ok:
                 print(f"  Leg {i}: SKIPPED (no path found)")
