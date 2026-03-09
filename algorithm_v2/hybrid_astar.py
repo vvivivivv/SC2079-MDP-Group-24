@@ -304,21 +304,21 @@ def path_to_commands(path):
     commands = []
     for move_type, count in segments:
         if move_type == 'S':
-            dist = round(STEP_SIZE_CM * count)
+            dist = round(STEP_SIZE_CM * count * 10) # Multiply by 10 for mm
             commands.append(f"FW{dist}")
 
         elif move_type == 'L':
             total_deg = round(step_angle_deg * count)
-            total_arc = round(step_arc_len * count)
-            commands.append(f"FL{total_deg:03d}_{total_arc:03d}")
+            total_arc = round(step_arc_len * count * 10) # Multiply by 10 for mm
+            commands.append(f"FL{total_arc}")
 
         elif move_type == 'R':
             total_deg = round(step_angle_deg * count)
-            total_arc = round(step_arc_len * count)
-            commands.append(f"FR{total_deg:03d}_{total_arc:03d}")
+            total_arc = round(step_arc_len * count * 10) # Multiply by 10 for mm
+            commands.append(f"FR{total_arc}")
 
         elif move_type == 'B':
-            dist = round(STEP_SIZE_CM * count)
+            dist = round(STEP_SIZE_CM * count * 10) # Multiply by 10 for mm
             commands.append(f"BW{dist}")
 
     return commands

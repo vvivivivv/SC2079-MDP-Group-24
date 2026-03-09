@@ -295,40 +295,36 @@ class Robot:
         # 1. ARC MOVES (FR / FL)
         if cmd.startswith("FR") or cmd.startswith("FL"):
             try:
-                parts = cmd[2:].split('_')
-                if len(parts) == 2:
-                    dist_cm = int(parts[1])
-                else:
-                    dist_cm = 20
-
+                # Extract the number right after FR/FL
+                dist_cm = int(cmd[2:]) / 10.0  # Divide by 10 to get cm back
+                
                 self.target_val = dist_cm
                 self.state = "MOVING" 
-
-                R = PLANNER_TURN_RADIUS 
-                half_track = ROBOT_AXLE_TRACK / 2.0
                 
-                v_outer = CURRENT_SPEED * (R + half_track) / R
-                v_inner = CURRENT_SPEED * (R - half_track) / R
-
+                # Set motor speeds for the arc based on turn radius
+                half_axle = ROBOT_AXLE_TRACK / 2.0
+                
                 if cmd.startswith("FL"):
-                    self.vl = v_inner; self.vr = v_outer 
-                else: # FR
-                    self.vl = v_outer; self.vr = v_inner
+                    self.vl = CURRENT_SPEED * (PLANNER_TURN_RADIUS - half_axle) / PLANNER_TURN_RADIUS
+                    self.vr = CURRENT_SPEED * (PLANNER_TURN_RADIUS + half_axle) / PLANNER_TURN_RADIUS
+                else:  # FR
+                    self.vl = CURRENT_SPEED * (PLANNER_TURN_RADIUS + half_axle) / PLANNER_TURN_RADIUS
+                    self.vr = CURRENT_SPEED * (PLANNER_TURN_RADIUS - half_axle) / PLANNER_TURN_RADIUS
                     
             except ValueError:
                 self.state = "IDLE"; self.current_cmd_idx += 1
-            return
-
+                return
+            
         # 2. STRAIGHT MOVES (FW / BW)
         elif cmd.startswith("FW"):
-            try: val = int(cmd[2:])
-            except: val = 10
+            try: val = int(cmd[2:]) / 10.0 # Divide by 10 to get cm back
+            except: val = 10.0
             self.target_val = val; self.state = "MOVING"
             self.vl = CURRENT_SPEED; self.vr = CURRENT_SPEED
 
         elif cmd.startswith("BW"):
-            try: val = int(cmd[2:])
-            except: val = 10
+            try: val = int(cmd[2:]) / 10.0 # Divide by 10 to get cm back
+            except: val = 10.0
             self.target_val = val; self.state = "MOVING"
             self.vl = -CURRENT_SPEED; self.vr = -CURRENT_SPEED
 

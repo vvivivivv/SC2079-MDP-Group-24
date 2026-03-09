@@ -7,7 +7,8 @@ from model import *
 app = Flask(__name__)
 CORS(app)
 model = None
-
+SAVE_DIR = "./received_images"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 @app.route('/status', methods=['GET'])
 def status():
@@ -44,29 +45,12 @@ def path_finding():
         "error": None
     })
 
-
-@app.route('/image', methods=['POST'])
-def image_predict():
-    file = request.files['file']
-    filename = file.filename
-    file.save(os.path.join('uploads', filename))
-    constituents = file.filename.split("_")
-    obstacle_id = constituents[1]
-    image_id = predict_image_week_9(filename, model)
-    result = {
-        "obstacle_id": obstacle_id,
-        "image_id": image_id
-    }
-    return jsonify(result)
-
-
-@app.route('/stitch', methods=['GET'])
-def stitch():
-    img = stitch_image()
-    img.show()
-    img2 = stitch_image_own()
-    img2.show()
-    return jsonify({"result": "ok"})
+@app.route("/upload", methods=["POST"])
+def upload_image():
+    f = request.files["file"]
+    save_path = os.path.join(SAVE_DIR, f.filename)
+    f.save(save_path)
+    return jsonify({"ok": True, "saved_as": f.filename})
 
 
 if __name__ == '__main__':
