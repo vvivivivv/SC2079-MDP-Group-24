@@ -67,7 +67,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t EncoderTaskHandle;
 const osThreadAttr_t EncoderTask_attributes = {
   .name = "EncoderTask",
-  .stack_size = 256 * 4,
+  .stack_size = 256 * 8,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for readICMTask */
@@ -176,7 +176,8 @@ const int SPEED_HIGH = 6000;
 const int SPEED_NORM = 3000;
 const int SPEED_SLOW = 1500;
 const int SPEED_VERY_SLOW = 700;
-const int SPEED_MIN = 600;
+const int SPEED_MIN = 700;
+const int SLOW_DOWN_RATIO = 4; // when approaching, it divides the current target speed by this ratio.
 
 volatile int speedA = SPEED_NORM; // the pwm wave, 7199 is max i think
 volatile int speedB = SPEED_NORM;
@@ -187,12 +188,12 @@ volatile int speedB_target = 0;
 //const float ENCODER_COUNTS_PER_REVOLUTION = 1540.0f;
 //const float ENCODER_COUNTS_PER_REVOLUTION = 680.0f;
 const float ENCODER_COUNTS_PER_REVOLUTION = 770.0f;
-const float WHEEL_CIRCUMFERENCE_CM = 6.5f*3.14f;
+const float WHEEL_CIRCUMFERENCE_CM = 6.5f*3.14f * 10; // im changing this to mm but im lazy to change all the constants to MM so im just going to *10 here.
 volatile int rotations = 0;
 
-volatile float Adist = 0; //temp vars
-volatile float Bdist = 0;
-volatile float average_dist = 0;
+volatile double Adist = 0; //temp vars
+volatile double Bdist = 0;
+volatile double average_dist = 0;
 
 // trying pid controller
 static PidDef pidMatch;
@@ -283,6 +284,8 @@ void stop(){
 	__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_1, 0);
 	__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, 0);
 	__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, 0);
+	TIM4->CNT = 0;
+	TIM9->CNT = 0;
 	/*
 	HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_RESET); // set direction of rotation for wheel A - forward
 	HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_RESET);
@@ -382,6 +385,7 @@ void encoder(void *argument)
             //float speed_error = speedA_target - current_speed;
             int speed_error_a = 0;
             int speed_error_b = 0;
+            int tmp = 0;
             // 计算基础 PWM：原本设定的 speedA + PID 补偿
             //int base_pwm_a = speedA_target + (int)(speed_error * Kp_speed);
 
@@ -406,19 +410,27 @@ void encoder(void *argument)
             	// only do it if its at least of a certain speed
 				if (abs(Adiff) < abs(pwm_to_encoder(speedA_target))){
 					speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target) - abs(Adiff));
+					/*
 					if (approaching_flag){
 						speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target / 2) - abs(Adiff));
+						//tmp = speedA_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedA_target/SLOW_DOWN_RATIO;
+						//speed_error_a = encoder_to_pwm(pwm_to_encoder(tmp - abs(Adiff)));
 					}
+					*/
 				}
             }
 
             if (speedB_target > SPEED_MIN){
 				// only do it if its at least of a certain speed
 				if (abs(Bdiff) < abs(pwm_to_encoder(speedB_target))){
-					speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target) - abs(Bdiff));
+					//speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target) - abs(Bdiff));
+					//tmp = speedB_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedB_target/SLOW_DOWN_RATIO;
+					/*
 					if (approaching_flag){
 						speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target/2) - abs(Bdiff));
+						//speed_error_b = encoder_to_pwm(pwm_to_encoder(tmp - abs(Bdiff)));
 					}
+					*/
 				}
 			}
 
@@ -429,10 +441,14 @@ void encoder(void *argument)
             if (approaching_flag){
             	speedA = speedA_target / 2 + speed_error_a;
             	speedB = speedB_target / 2 + speed_error_b;
+            	//speedA = (speedA_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedA_target/SLOW_DOWN_RATIO) + speed_error_a;
+            	//speedB = (speedB_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedB_target/SLOW_DOWN_RATIO) + speed_error_b;
             }
 
             char buf[20];
-            sprintf(buf, "S %d, %d, %d", (int)speed_error_a, encoder_to_pwm(abs(Adiff)), (int) speedA_target);
+            //sprintf(buf, "S %d, %d, %d", (int)speed_error_a, encoder_to_pwm(abs(Adiff)), (int) speedA_target);
+            sprintf(buf, "S %d, %d, %d", CA, Adiff, Bdiff);
+
             display(buf, 2);
 
             // 6. 安全限幅
@@ -561,10 +577,10 @@ void testMoveThread(void* arg){
 				move(1); // speedA is volatile, so the move thread (self) has to either keep track of when it changes, or just always call it lol
 				if (start_angle < turned_angle){
 					// drifting left
-					turn(SERVO_STRAIGHT + 10); // temp value
+					turn(SERVO_STRAIGHT + 5); // temp value
 				} else if (start_angle > turned_angle){
 					//drifting right
-					turn(SERVO_STRAIGHT - 10); //temp value
+					turn(SERVO_STRAIGHT - 5); //temp value
 				} else {
 					turn(SERVO_STRAIGHT);
 				}
@@ -851,9 +867,13 @@ void move_by_dist(int dir, int dist_target){
 
 	int starting_dist;
 	int dist_moved;
-	int tmp;
+	int tmp_a, tmp_b;
 	int dist_to_go;
 	char buf[20];
+
+	int cp1 = 0; // checkpoints. set to true when the conditional is met so it doesnt run multiple times
+	int cp2 = 0;
+	int cp3 = 0;
 
 	starting_dist = average_dist;
 	move_flag = dir;
@@ -867,16 +887,27 @@ void move_by_dist(int dir, int dist_target){
 		//fdisplay(buf, 2);
 
 		dist_to_go = (abs(dist_target) - abs(dist_moved));
-		if (dist_to_go <= 15){
+		if (cp1 == 0 && dist_to_go <= 150){
 			// slow down if 10 cm away
 			//TODO implement PIDDDDD AHHH
 			//tmp = ((SPEED_SLOW - SPEED_VERY_SLOW) / 10 * dist_to_go)  + SPEED_VERY_SLOW;
 			//speedA = tmp;
 			//speedB = tmp;
-			//set_speed(speedA_target )
-			approaching_flag = 1;
-		} else { // stop it 2cm early to prevent overshooting.
-			approaching_flag = 0;
+			set_speed(speedA_target / 2, speedB_target /2 );
+			cp1 = 1;
+			//approaching_flag = 1;
+		} else if (cp2 == 0 && dist_to_go <= 100){
+			tmp_a = speedA_target / 2 < SPEED_MIN ? SPEED_MIN : speedA_target / 2;
+			tmp_b = speedB_target / 2 < SPEED_MIN ? SPEED_MIN : speedB_target / 2;
+			set_speed(tmp_a, tmp_b);
+			cp2 = 1;
+			//approaching_flag = 0;
+		} else if (cp3 == 0 && dist_to_go <= 50){
+			tmp_a = speedA_target / 2 < SPEED_MIN ? SPEED_MIN : speedA_target / 2;
+			tmp_b = speedB_target / 2 < SPEED_MIN ? SPEED_MIN : speedB_target / 2;
+			set_speed(tmp_a, tmp_b);
+			cp3 = 1;
+			//approaching_flag = 0;
 		}
 	}
 
@@ -944,6 +975,8 @@ void execute_command_thread(void* args){
 
 	Command cmd;
 
+	// make sure the robot is straight before anything
+	turn(SERVO_STRAIGHT);
 	for(;;){
 		if(ready_execute == 1){
 			if(xQueueReceive(commandQueue, &cmd, portMAX_DELAY) == pdPASS){
@@ -959,7 +992,13 @@ void execute_command_thread(void* args){
 
 
 				// REDUCE BY A CALIBRATED ERROR. THIS WILL LIKELY NEED TO CHANGE IN THE FUTURE TODO:
-				value -= forward_error;
+				// TEMP HARDCODE IT TO STOP 2cm early to prevent overshooting.
+				//forward_error = 15;
+				forward_error = 0;
+				if (value > forward_error * 2) { // only minus if the distance is significant enough to maybe cause overshootin
+					value -= forward_error;
+				}
+
 				display(tmp, 3);
 				//send(command);
 				if (strcmp(command, commands[0]) == 0 ){ //FWD
@@ -981,7 +1020,7 @@ void execute_command_thread(void* args){
 				if (strcmp(command, commands[1]) == 0){ //BCK
 					set_speed(SPEED_NORM, SPEED_NORM);
 					straighten_flag = 1;
-					move_by_dist(2, value);
+					move_by_dist(2, value + 18); // for some reason, the robot is always short by 2cm.. so lol
 					straighten_flag = 0;
 				}
 				if (strcmp(command, commands[2]) == 0){ //LFT
@@ -1057,7 +1096,7 @@ void execute_command_thread(void* args){
 					set_speed(SPEED_NORM, SPEED_NORM /2 );
 					turn_flag = SERVO_RIGHT;
 					osDelay(500); // wait for the servo to turn
-					move_by_dist(2, value);
+					move_by_dist(2, value); // BRUH
 					turn_flag = SERVO_STRAIGHT;
 					/*
 					target_angle = turned_angle - 90;
@@ -1082,7 +1121,7 @@ void execute_command_thread(void* args){
 					set_speed(SPEED_NORM / 2, SPEED_NORM);
 					turn_flag = SERVO_LEFT;
 					osDelay(500); // wait for the servo to turn
-					move_by_dist(2, value);
+					move_by_dist(2, value); // :( // +18
 					turn_flag = SERVO_STRAIGHT;
 					/*
 					target_angle = turned_angle + 90;
@@ -1981,6 +2020,11 @@ void readICM(void *argument)
 
 	      sprintf(errBuf, "I2C ERR: 0x%lX", error);
 	      OLED_ShowString(10, 40, errBuf);
+
+	      buzz();
+	      osDelay(1000);
+	      buzz();
+	      osDelay(1000); // since oled is turned off for now, buzz when the gyro fails
 	  }
 	// Read 2 hex bytes (MSB + LSB)
 	if (HAL_I2C_Master_Receive(&hi2c2, 0x68 << 1, rawData, 2, 1000)!=HAL_OK){
@@ -2001,8 +2045,8 @@ void readICM(void *argument)
 	//display(theta, 1);
 	turned_angle = theta;
 
-	//sprintf(buf, "%d", turned_angle);
-	//display(buf, 1);
+	sprintf(buf, "%d", turned_angle);
+	display(buf, 1);
 
 	//sprintf(buf2, "%d", gyro_z_raw);
 	//display(buf2, 3);
