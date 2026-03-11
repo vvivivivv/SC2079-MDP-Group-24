@@ -20,7 +20,7 @@ ARCHITECTURE (optimized for physical speed):
     - The need for unreliable CCW→CW conversion
 
   Command set:
-    FW/BW/FL/FR/BL/BR  — Ackermann drive, distances in mm (from RS or A*)
+    FW/BW/FL/FR/BL/BR  — Ackermann drive (from RS or A*)
     SNAP{id}            — Capture image
     FIN                 — Mission complete
 """
@@ -34,22 +34,22 @@ from entities.Robot import Robot
 from entities.Entity import Obstacle, CellState, Grid
 from consts import (
     Direction, ITERATIONS,
-    ROBOT_TURN_RADIUS_CM,
     ROBOT_TURN_RADIUS_FL_CM, ROBOT_TURN_RADIUS_FR_CM,
     ROBOT_TURN_RADIUS_BL_CM, ROBOT_TURN_RADIUS_BR_CM,
-    ROBOT_TURN_RADIUS_MAX_CM, ROBOT_TURN_RADIUS_MIN_CM,
+    ROBOT_TURN_RADIUS_MAX_CM,
     ROBOT_SPEED_CM_S,
-    ROBOT_WHEELBASE_CM
+    ROBOT_WHEELBASE_CM,
+    SCALE_FW, SCALE_BW, SCALE_FL, SCALE_FR, SCALE_BL, SCALE_BR,
+    OFFSET_FW, OFFSET_BW, OFFSET_FL, OFFSET_FR, OFFSET_BL, OFFSET_BR
 )
 from python_tsp.exact import solve_tsp_dynamic_programming
 from reeds_shepp import (
-    get_optimal_path_length, get_optimal_path_segments,
-    sample_path
+    get_optimal_path_length, get_optimal_path_segments
 )
 
 from hybrid_astar import (
     hybrid_astar_search, path_to_commands, build_obstacle_list,
-    TURN_RADIUS_CM, OBSTACLE_RADIUS_CM
+    OBSTACLE_RADIUS_CM
 )
 
 
@@ -76,7 +76,7 @@ def _euler_simulate_segments(start, segments):
              end_pose = (x, y, theta) — the actual endpoint.
     """
     L = ROBOT_WHEELBASE_CM
-    speed = 30.0  # ROBOT_SPEED_CM_S
+    speed = ROBOT_SPEED_CM_S
     dt = 1.0 / 60.0
 
     # Steering angle and velocity for each segment type
@@ -91,24 +91,30 @@ def _euler_simulate_segments(start, segments):
 
     x, y, theta = start
     points = [(x, y)]
+    SAMPLE_EVERY_CM = 3.0  # Subsample for collision checking (obstacles are 33cm radius)
 
     for seg_type, length_cm, gear in segments:
-        if length_cm < 0.1:  # skip segments < 1mm (matches reeds_shepp filter)
+        if length_cm < 0.5:
             continue
 
-        dist_cm = round(length_cm * 10) / 10.0  # mm-precision (matches command generation)
+        dist_cm = round(length_cm)
         v, delta = _SEG_PARAMS.get((seg_type, gear), (speed, 0.0))
         omega = (v / L) * math.tan(delta) if abs(delta) > 1e-9 else 0.0
 
         traveled = 0.0
+        since_last_sample = 0.0
         while traveled < dist_cm:
             x += v * math.cos(theta) * dt
             y += v * math.sin(theta) * dt
             theta += omega * dt
-            traveled += abs(v * dt)
-            points.append((x, y))
+            step = abs(v * dt)
+            traveled += step
+            since_last_sample += step
+            if since_last_sample >= SAMPLE_EVERY_CM:
+                points.append((x, y))
+                since_last_sample = 0.0
 
-        points.append((x, y))
+        points.append((x, y))  # always include segment endpoint
 
     return points, (x, y, theta)
 
@@ -128,8 +134,8 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
         (is_clear, segments, total_length, actual_end_pose) or (False, None, inf, None)
     """
     ARENA = 200.0
-    CLEARANCE = 15.0
-    CAPTURE_CLEARANCE = 25.0
+    CLEARANCE = 2.0
+    CAPTURE_CLEARANCE = 28.0
 
     # Candidate planning radii: the four real radii plus their average.
     # Different radii produce different RS path shapes; the one whose
@@ -182,16 +188,19 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
         pos_err = math.sqrt((actual_end[0] - end[0])**2 +
                             (actual_end[1] - end[1])**2)
         hdg_err = abs(((actual_end[2] - end[2] + math.pi) % (2 * math.pi)) - math.pi)
-
-        # Penalize arc-heavy paths: arcs are inaccurate on real hardware.
-        # Every cm of arc travel adds a small penalty so the planner
-        # prefers paths that use more straights for the same endpoint.
-        arc_cm = sum(l for s, l, g in segments if s in ('L', 'R'))
-        arc_penalty = arc_cm * 0.02  # 2% penalty per cm of arc
-
         # Heading error is weighted heavily because it compounds through
         # subsequent straight segments (~1cm lateral per degree per 50cm)
-        score = pos_err + 30.0 * hdg_err + arc_penalty
+        score = pos_err + 30.0 * hdg_err
+
+        # Penalise paths that stray close to (or past) the arena edge.
+        # No physical walls, but staying inside keeps the robot trackable
+        # and avoids unnecessary excursions.
+        EDGE_SOFT_MARGIN = 15.0   # cm — start penalising inside this
+        EDGE_PENALTY_WEIGHT = 2.0
+        for px, py in points:
+            edge_margin = min(px, py, ARENA - px, ARENA - py)
+            if edge_margin < EDGE_SOFT_MARGIN:
+                score += EDGE_PENALTY_WEIGHT * (EDGE_SOFT_MARGIN - edge_margin)
 
         if score < best_score:
             best_score = score
@@ -204,44 +213,24 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
 
 
 def rs_segments_to_commands(segments):
-    """Convert Reeds-Shepp segments to robot commands (distances in mm).
-    
-    Segment format: (type, length_cm, gear)
-      type: 'L', 'R', 'S'
-      gear: 'F' (forward), 'B' (backward)
-    
-    Maps to: FL, FR, FW, BW, BL, BR commands.
-    
-    All segments are broken into chunks (arcs ≤200mm, straights ≤999mm)
-    to stay within firmware's 3-digit parsing limit and improve accuracy.
-    """
-    MAX_ARC_CMD_MM = 200    # max mm per single arc command
-    MAX_STRAIGHT_CMD_MM = 999  # max mm per single straight command (3-digit limit)
+    _CMD_MAP = {
+        ('S', 'F'): ('FW', SCALE_FW, OFFSET_FW),
+        ('S', 'B'): ('BW', SCALE_BW, OFFSET_BW),
+        ('L', 'F'): ('FL', SCALE_FL, OFFSET_FL),
+        ('L', 'B'): ('BR', SCALE_BR, OFFSET_BR),
+        ('R', 'F'): ('FR', SCALE_FR, OFFSET_FR),
+        ('R', 'B'): ('BL', SCALE_BL, OFFSET_BL),
+    }
 
     commands = []
     for seg_type, length_cm, gear in segments:
-        dist_mm = max(1, round(length_cm * 10))  # convert cm -> mm
-        if seg_type == 'S':
-            prefix = "FW" if gear == 'F' else "BW"
-            remaining = dist_mm
-            while remaining > 0:
-                chunk = min(remaining, MAX_STRAIGHT_CMD_MM)
-                commands.append(f"{prefix}{chunk}")
-                remaining -= chunk
-        elif seg_type in ('L', 'R'):
-            if seg_type == 'L':
-                prefix = "FL" if gear == 'F' else "BR"
-            else:
-                prefix = "FR" if gear == 'F' else "BL"
-
-            # Break long arcs into chunks
-            remaining = dist_mm
-            while remaining > 0:
-                chunk = min(remaining, MAX_ARC_CMD_MM)
-                commands.append(f"{prefix}{chunk}")
-                remaining -= chunk
-        else:
+        entry = _CMD_MAP.get((seg_type, gear))
+        if entry is None:
             continue
+        prefix, scale, offset = entry
+        center_arc_mm = length_cm * 10
+        dist_mm = max(10, round(center_arc_mm * scale + offset))
+        commands.append(f"{prefix}{dist_mm}")
     return commands
 
 
@@ -257,6 +246,7 @@ class MazeSolver:
         self.size_x = size_x
         self.size_y = size_y
         self.obstacle_centers = []
+        self._rs_cache = {}
 
     def add_obstacle(self, x, y, direction: Direction, obstacle_id: int):
         obstacle = Obstacle(x, y, direction, obstacle_id)
@@ -291,16 +281,25 @@ class MazeSolver:
     # REEDS-SHEPP TSP COST MATRIX
     # =================================================================
 
+    _AVG_RADIUS = (ROBOT_TURN_RADIUS_FL_CM + ROBOT_TURN_RADIUS_FR_CM +
+                   ROBOT_TURN_RADIUS_BL_CM + ROBOT_TURN_RADIUS_BR_CM) / 4.0
+
     def _rs_travel_cost(self, pose_a, pose_b):
-        """Reeds-Shepp path length between two poses.
-        
+        """Reeds-Shepp path length between two poses (cached).
+
         Uses the average turning radius for cost estimation, since the
         actual path will use a mix of FL/FR/BL/BR arcs with different
         radii.  This gives more accurate TSP ordering than using MAX.
         """
-        avg_radius = (ROBOT_TURN_RADIUS_FL_CM + ROBOT_TURN_RADIUS_FR_CM +
-                      ROBOT_TURN_RADIUS_BL_CM + ROBOT_TURN_RADIUS_BR_CM) / 4.0
-        return get_optimal_path_length(pose_a, pose_b, avg_radius)
+        # Quantize to 1mm / 0.1deg to collapse near-identical poses
+        key = (round(pose_a[0], 1), round(pose_a[1], 1), round(pose_a[2], 3),
+               round(pose_b[0], 1), round(pose_b[1], 1), round(pose_b[2], 3))
+        cached = self._rs_cache.get(key)
+        if cached is not None:
+            return cached
+        cost = get_optimal_path_length(pose_a, pose_b, self._AVG_RADIUS)
+        self._rs_cache[key] = cost
+        return cost
 
     # =================================================================
     # VISIT ORDER (TSP)
@@ -319,11 +318,13 @@ class MazeSolver:
     def _generate_combination(view_positions, index, current, result, iteration_left):
         if index == len(view_positions):
             result.append(current[:])
+            iteration_left[0] -= 1
             return
-        if iteration_left[0] == 0:
+        if iteration_left[0] <= 0:
             return
-        iteration_left[0] -= 1
         for j in range(len(view_positions[index])):
+            if iteration_left[0] <= 0:
+                return
             current.append(j)
             MazeSolver._generate_combination(
                 view_positions, index + 1, current, result, iteration_left)
@@ -504,14 +505,15 @@ class MazeSolver:
                 print(f"  Leg {i}: RS direct, {rs_len:.0f}cm, "
                       f"{len(segments)} segments")
 
-            # --- ATTEMPT 2: A* heading-constrained (Euclidean+heading heuristic) ---
+            # --- ATTEMPT 2: A* heading-constrained (budget-limited) ---
             if not leg_ok:
                 path, iters = hybrid_astar_search(
                     start_pose, goal_xy, obs_expanded,
                     goal_tolerance_cm=8.0,
                     heading_tolerance_rad=0.35,  # ~20 deg (within camera half-FOV of 31 deg)
                     position_only=False,
-                    skip_obstacle_indices=skip_indices)
+                    skip_obstacle_indices=skip_indices,
+                    max_iterations=50000)
 
                 if path:
                     leg_commands = path_to_commands(path)
@@ -572,7 +574,7 @@ class MazeSolver:
 
     @staticmethod
     def _compress_commands(commands):
-        """Merge consecutive FW/BW commands (values in mm)."""
+        """Merge consecutive FW/BW commands (distances in mm)."""
         if not commands:
             return commands
         compressed = [commands[0]]

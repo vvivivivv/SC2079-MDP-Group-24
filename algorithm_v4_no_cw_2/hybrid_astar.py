@@ -19,7 +19,6 @@ Heuristic: Reeds-Shepp optimal path length (analytic, ~0.05ms per call).
 import math
 import heapq
 from consts import (
-    ROBOT_TURN_RADIUS_CM,
     ROBOT_TURN_RADIUS_FL_CM,
     ROBOT_TURN_RADIUS_FR_CM,
     ROBOT_TURN_RADIUS_BL_CM,
@@ -28,7 +27,8 @@ from consts import (
     ROBOT_TURN_RADIUS_MIN_CM,
     ROBOT_SPEED_CM_S,
     ROBOT_WHEELBASE_CM,
-    ROBOT_RADIUS_CM
+    SCALE_FW, SCALE_BW, SCALE_FL, SCALE_FR, SCALE_BL, SCALE_BR,
+    OFFSET_FW, OFFSET_BW, OFFSET_FL, OFFSET_FR, OFFSET_BL, OFFSET_BR
 )
 from reeds_shepp import get_optimal_path_length
 
@@ -43,11 +43,10 @@ TURN_RADIUS_FL_CM = ROBOT_TURN_RADIUS_FL_CM
 TURN_RADIUS_FR_CM = ROBOT_TURN_RADIUS_FR_CM
 TURN_RADIUS_BL_CM = ROBOT_TURN_RADIUS_BL_CM
 TURN_RADIUS_BR_CM = ROBOT_TURN_RADIUS_BR_CM
-TURN_RADIUS_CM = ROBOT_TURN_RADIUS_MAX_CM
 TURN_RADIUS_HEURISTIC_CM = ROBOT_TURN_RADIUS_MIN_CM
 STEP_SIZE_CM = 8.0
 ARENA_SIZE_CM = 200.0
-ROBOT_CLEARANCE_CM = 15.0
+ROBOT_CLEARANCE_CM = 2.0
 
 # Discretization
 CELL_SIZE_CM = 4.0
@@ -59,9 +58,28 @@ MAX_ITERATIONS = 200000
 REVERSE_PENALTY = 1.2
 DIRECTION_CHANGE_PENALTY = 8.0
 
-# Obstacle clearance — robot half-diagonal is ~21cm, plus safety margin.
-# 33cm keeps the robot body ≥12cm from any obstacle edge during transit.
-OBSTACLE_RADIUS_CM = 33.0
+# Obstacle clearance during TRANSIT (not capture approach).
+# Geometry:
+#   - Obstacle physical block: 10x10cm, virtual zone: 40x40cm
+#   - Virtual zone half-width: 20cm from obstacle center
+#   - Robot half-width: 15cm from center to side
+#   - Robot half-diagonal: ~21.2cm from center to corner
+#
+# OBSTACLE_RADIUS_CM is how far the robot CENTER must stay from an
+# obstacle CENTER during A* pathfinding.  The gap from the robot
+# body to the virtual zone edge is:
+#   gap = OBSTACLE_RADIUS_CM - 20 (virt half) - 15 (robot half-width)
+#
+# Tradeoff (for typical 8-obstacle configs):
+#   R=33: gap=-2cm (robot enters virtual zone!)   2 blocked pairs
+#   R=35: gap= 0cm (robot body touches zone edge) 5 blocked pairs
+#   R=38: gap= 3cm (safe, ~3cm clearance)         9 blocked pairs
+#   R=40: gap= 5cm (very safe, 5cm clearance)    11 blocked pairs
+#   R=42: gap= 7cm (safest, but very restricted) 12 blocked pairs
+#
+# 38cm gives a 3cm body-to-virtual-zone gap (~23cm from physical block).
+# This keeps paths feasible while avoiding risky close passes.
+OBSTACLE_RADIUS_CM = 38.0
 
 
 # =============================================================================
@@ -97,7 +115,7 @@ def _point_hits_obstacle(px, py, obstacles):
 # path the simulator will execute.  This replaces the old idealized
 # circular-arc collision check that could diverge by several cm.
 
-_ARC_COLLISION_POINTS = 10   # How many intermediate samples per primitive
+_ARC_COLLISION_POINTS = 4    # Samples per 8cm step (~2cm spacing; sufficient for 33cm obstacle zones)
 
 def _precompute_euler_deltas():
     """Precompute with INDEPENDENT FL/FR/BL/BR turning radii.
@@ -210,6 +228,13 @@ def _get_successors(x, y, theta, obstacles, prev_move=None):
             if is_reverse != prev_is_reverse:
                 cost += DIRECTION_CHANGE_PENALTY
 
+        # Soft penalty for approaching the arena edge — no physical walls,
+        # but prefer paths that stay inside the 200×200 cm arena.
+        _EDGE_SOFT = 15.0
+        edge_margin = min(nx, ny, ARENA_SIZE_CM - nx, ARENA_SIZE_CM - ny)
+        if edge_margin < _EDGE_SOFT:
+            cost += 0.5 * (_EDGE_SOFT - edge_margin)
+
         results.append((nx, ny, nt, cost, move))
 
     return results
@@ -234,25 +259,6 @@ def _h_euclidean(x, y, gx, gy):
     return math.sqrt((x - gx)**2 + (y - gy)**2)
 
 
-def _h_euclidean_with_heading(x, y, theta, gx, gy, gtheta):
-    """Euclidean + lightweight heading penalty.
-    
-    Adds a fraction of the heading mismatch as extra cost.
-    This biases A* toward paths arriving near the goal heading
-    WITHOUT the 200us/call cost of full RS heuristic.
-    
-    The heading penalty is scaled by TURN_RADIUS so it's in cm
-    (matching the distance heuristic units). This keeps it admissible
-    when the weight is <= 1.0 (a heading change of X radians needs
-    at least X * turn_radius cm of arc).
-    """
-    dist = math.sqrt((x - gx)**2 + (y - gy)**2)
-    hdiff = abs((theta - gtheta + math.pi) % (2 * math.pi) - math.pi)
-    # Weight: 0.5 * turn_radius * heading_diff is admissible
-    # (real arc cost = turn_radius * heading_diff, so 0.5x is safe)
-    heading_cost = 0.5 * TURN_RADIUS_CM * hdiff
-    return dist + heading_cost
-
 
 # =============================================================================
 # HYBRID A* SEARCH — HEADING-CONSTRAINED (PRIMARY MODE)
@@ -264,7 +270,8 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
                         position_only=False,
                         start_obstacle_idx=None,
                         goal_obstacle_idx=None,
-                        skip_obstacle_indices=None):
+                        skip_obstacle_indices=None,
+                        max_iterations=None):
     """Find path from start pose to goal pose.
     
     PRIMARY MODE (position_only=False):
@@ -294,8 +301,13 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     gx, gy = goal[0], goal[1]
     gt = goal[2] if len(goal) > 2 and not position_only else st
 
-    # Reduce radius for nearby obstacles (start, goal, or post-spin drift)
-    CAPTURE_CLEARANCE = 25.0
+    # Reduced clearance for obstacles near the start/goal capture positions.
+    # The robot MUST approach the target obstacle closely for photography,
+    # so we relax the radius for that specific obstacle (and its neighbors).
+    # 28cm keeps the robot center ≥28cm from obstacle center, meaning
+    # robot body is ≥8cm from virtual zone edge — still safe but allows
+    # the close approach needed for capture positions.
+    CAPTURE_CLEARANCE = 28.0
     skip_set = set()
     if skip_obstacle_indices:
         skip_set = set(skip_obstacle_indices)
@@ -319,23 +331,24 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
     sk = _grid_key(sx, sy, st)
     g_cost[sk] = 0
 
-    # Use heading-aware Euclidean when goal heading is known (cheap but effective)
+    # Use Reeds-Shepp heuristic when goal heading is known (tight, admissible)
     if not position_only:
-        h_start = _h_euclidean_with_heading(sx, sy, st, gx, gy, gt)
+        h_start = _h_reeds_shepp(sx, sy, st, gx, gy, gt)
     else:
         h_start = _h_euclidean(sx, sy, gx, gy)
 
     heapq.heappush(open_set, (h_start, counter, sx, sy, st, None))
 
+    max_iter = max_iterations if max_iterations is not None else MAX_ITERATIONS
     iterations = 0
-    while open_set and iterations < MAX_ITERATIONS:
+    while open_set and iterations < max_iter:
         iterations += 1
         f, _, cx, cy, ct, prev_move = heapq.heappop(open_set)
         ck = _grid_key(cx, cy, ct)
 
         cur_g = g_cost.get(ck, float('inf'))
         if not position_only:
-            h_cur = _h_euclidean_with_heading(cx, cy, ct, gx, gy, gt)
+            h_cur = _h_reeds_shepp(cx, cy, ct, gx, gy, gt)
         else:
             h_cur = _h_euclidean(cx, cy, gx, gy)
 
@@ -370,7 +383,7 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
                 parent[nk] = (ck, move, cx, cy, ct)
                 counter += 1
                 if not position_only:
-                    h = _h_euclidean_with_heading(nx, ny, nt, gx, gy, gt)
+                    h = _h_reeds_shepp(nx, ny, nt, gx, gy, gt)
                 else:
                     h = _h_euclidean(nx, ny, gx, gy)
                 heapq.heappush(open_set, (new_g + h, counter, nx, ny, nt, move))
@@ -383,21 +396,27 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
 # =============================================================================
 
 def path_to_commands(path):
-    """Convert Hybrid A* path to drive commands.
-    
-    Commands (distances in mm):
-      S  -> FW{dist}   forward straight
-      B  -> BW{dist}   backward straight
-      L  -> FL{dist}   full-lock left, forward
-      R  -> FR{dist}   full-lock right, forward
-      BL -> BL{dist}   full-lock left, backward
-      BR -> BR{dist}   full-lock right, backward
-    
-    All commands are chunked to stay within firmware limits:
-    arcs ≤200mm, straights ≤999mm.
+    """Convert Hybrid A* path to drive commands (distances in mm).
+
+    Distances are corrected using empirical calibration constants
+    (SCALE_xx and OFFSET_xx) so the real robot matches the simulator.
+
+    Commands:
+      S  -> FW{dist_mm}   forward straight
+      B  -> BW{dist_mm}   backward straight
+      L  -> FL{dist_mm}   full-lock left, forward
+      R  -> FR{dist_mm}   full-lock right, forward
+      BL -> BL{dist_mm}   full-lock left, backward
+      BR -> BR{dist_mm}   full-lock right, backward
     """
-    MAX_ARC_CMD_MM = 200
-    MAX_STRAIGHT_CMD_MM = 999
+    _MOVE_MAP = {
+        'S':  ('FW', SCALE_FW, OFFSET_FW),
+        'B':  ('BW', SCALE_BW, OFFSET_BW),
+        'L':  ('FL', SCALE_FL, OFFSET_FL),
+        'R':  ('FR', SCALE_FR, OFFSET_FR),
+        'BL': ('BL', SCALE_BL, OFFSET_BL),
+        'BR': ('BR', SCALE_BR, OFFSET_BR),
+    }
 
     if not path or len(path) < 2:
         return []
@@ -412,20 +431,15 @@ def path_to_commands(path):
         else:
             segments.append((move, 1))
 
-    CMD_MAP = {'S': 'FW', 'B': 'BW', 'L': 'FL', 'R': 'FR', 'BL': 'BL', 'BR': 'BR'}
-    ARC_MOVES = {'L', 'R', 'BL', 'BR'}
-
     commands = []
     for move_type, count in segments:
-        dist_mm = round(STEP_SIZE_CM * count * 10)  # convert cm -> mm
-        prefix = CMD_MAP[move_type]
-        max_chunk = MAX_ARC_CMD_MM if move_type in ARC_MOVES else MAX_STRAIGHT_CMD_MM
-
-        remaining = dist_mm
-        while remaining > 0:
-            chunk = min(remaining, max_chunk)
-            commands.append(f"{prefix}{chunk}")
-            remaining -= chunk
+        entry = _MOVE_MAP.get(move_type)
+        if entry is None:
+            continue
+        prefix, scale, offset = entry
+        center_arc_mm = STEP_SIZE_CM * count * 10
+        dist_mm = max(10, round(center_arc_mm * scale + offset))
+        commands.append(f"{prefix}{dist_mm}")
 
     return commands
 

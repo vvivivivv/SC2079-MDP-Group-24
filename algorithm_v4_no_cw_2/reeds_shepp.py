@@ -169,7 +169,7 @@ def get_optimal_path_segments(start, end, radius):
     segments = []
     for elem in opt_path:
         length_cm = elem.param * radius
-        if length_cm < 0.1:  # skip segments < 1mm
+        if length_cm < 0.5:
             continue
 
         if elem.steering == STEER_LEFT:
