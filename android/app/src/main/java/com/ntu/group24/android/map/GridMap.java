@@ -146,7 +146,7 @@ public class GridMap extends View {
         idTextPaint.setColor(Color.WHITE);
         idTextPaint.setTextAlign(Paint.Align.CENTER);
         idTextPaint.setTypeface(Typeface.DEFAULT_BOLD);
-        idTextPaint.setTextSize(32f);
+        idTextPaint.setTextSize(20f);
 
         axisTextPaint.setColor(Color.DKGRAY);
         axisTextPaint.setTextAlign(Paint.Align.CENTER);
