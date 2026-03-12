@@ -74,7 +74,7 @@ const osThreadAttr_t EncoderTask_attributes = {
 osThreadId_t readICMTaskHandle;
 const osThreadAttr_t readICMTask_attributes = {
   .name = "readICMTask",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
@@ -209,6 +209,9 @@ static int16_t pwmValAccel = 0, pwmValTarget = 0,
 float forward_error = 0;
 float backward_error = 0;
 
+// float errors[6] = {5, -18, 0, +25, 10, -10}; // fw, bw, fl, fr, bl, br. i forgor how to dict in C
+float errors[6] = {6, 7, 13, 14, 15, 13};
+int angle_errors[4] = {2,2,1,2,1}; // fl fr bl br cw
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -254,7 +257,7 @@ void display(uint8_t* str, int buf_no){
 }
 
 void send(uint8_t* str){
-	HAL_UART_Transmit(&huart3, (uint8_t *) str, sizeof(str), 0xFFFF);
+	HAL_UART_Transmit(&huart3, (uint8_t *) str, strlen(str), 0xFFFF);
 }
 
 void display_thread(void* args){
@@ -423,7 +426,7 @@ void encoder(void *argument)
             if (speedB_target > SPEED_MIN){
 				// only do it if its at least of a certain speed
 				if (abs(Bdiff) < abs(pwm_to_encoder(speedB_target))){
-					//speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target) - abs(Bdiff));
+					speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target) - abs(Bdiff));
 					//tmp = speedB_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedB_target/SLOW_DOWN_RATIO;
 					/*
 					if (approaching_flag){
@@ -434,9 +437,43 @@ void encoder(void *argument)
 				}
 			}
 
+            //char buf5[20];
+            //sprintf(buf5, "%d, %d", (int) encoder_to_pwm(Adiff), (int) encoder_to_pwm(Bdiff));
+            //send(buf5);
 
-            speedA = speedA_target + speed_error_a;
-            speedB = speedB_target + speed_error_b;
+            //speedA = speedA_target + speed_error_a;
+            //speedB = speedB_target + speed_error_b;
+
+            // TRY TO ACCELERATE INTO THE TARGET SPEED INSTEAD OF INSTANTLY
+            //speedA = (speedA + speedA_target + speed_error_a) / 2;
+            //speedB = (speedB + speedB_target + speed_error_b) / 2;
+            const int INCREMENT_STEP = 100; // only increments by 100 at each iteration
+
+
+            if (speedA < speedA_target + speed_error_a){
+            	if ((speedA_target + speed_error_a - speedA) < INCREMENT_STEP){
+            		speedA = speedA_target + speed_error_a;
+            	} else {
+            		if(speedA_target < speedB_target){
+            			speedA += INCREMENT_STEP / 2; // account for turning ratio. hardcoded so ill kms if this ratio ever changes
+            		} else {
+            			speedA += INCREMENT_STEP;
+            		}
+            	}
+            }
+
+            if (speedB < speedB_target + speed_error_b){
+				if ((speedB_target + speed_error_b - speedB) < INCREMENT_STEP){
+					speedB = speedB_target + speed_error_b;
+				} else {
+					if(speedB_target < speedA_target){
+						speedB += INCREMENT_STEP / 2; // account for turning ratio. hardcoded so ill kms if this ratio ever changes
+					} else {
+						speedB += INCREMENT_STEP;
+					}
+				}
+			}
+
 
             if (approaching_flag){
             	speedA = speedA_target / 2 + speed_error_a;
@@ -577,10 +614,10 @@ void testMoveThread(void* arg){
 				move(1); // speedA is volatile, so the move thread (self) has to either keep track of when it changes, or just always call it lol
 				if (start_angle < turned_angle){
 					// drifting left
-					turn(SERVO_STRAIGHT + 5); // temp value
+					turn(SERVO_STRAIGHT + 10); // temp value
 				} else if (start_angle > turned_angle){
 					//drifting right
-					turn(SERVO_STRAIGHT - 5); //temp value
+					turn(SERVO_STRAIGHT - 10); //temp value
 				} else {
 					turn(SERVO_STRAIGHT);
 				}
@@ -622,7 +659,7 @@ void testTurnThread(void* arg){
 		if (turn_flag != -1){
 
 			sprintf(command, "IN TURN %d !", turn_flag); //TESTING
-			display(command, 1);
+			//display(command, 1);
 
 			turn(turn_flag);
 			turn_flag = -1;
@@ -633,7 +670,7 @@ void testTurnThread(void* arg){
 void turn(int value){
 	// turns the front wheels
 	if (value < SERVO_LEFT_MAX || value > SERVO_RIGHT_MAX){
-		display("value too extreme", 1);
+		//display("value too extreme", 1);
 		return;
 	}
 
@@ -649,35 +686,55 @@ void turn_in_place(int angle, int dir){
 	// dir = 0 => Clockwise
 	// dir = 1 => CounterClockwise
 
+	int cp1 = 0; // so the speed doesnt keep getting reset to a min speed (due to the acceleration code in encoder)
+	int cp2 = 0;
+	int cnt = 0;
 	turn_in_place_flag = 1;
 	if (dir == 0) {
 		int target_angle = turned_angle - angle;
 		turn(SERVO_LEFT_MAX);
 		osDelay(500); // wait for servo to turn
 		for (;;){
+			cnt += 1;
+
 			if (turned_angle > target_angle){
 				//sprintf(buf, "%d > %d",  (int)turned_angle, (int)target_angle);
 				//display(buf, 2);
-				if (turned_angle - target_angle < 30) {
+				if (turned_angle - target_angle < 30 && cp2 == 0) {
 					// slow down when approaching the target angle
+					set_speed(SPEED_SLOW/1.5, SPEED_NORM/1.5);
+					speedA = SPEED_SLOW/1.5; // min speed is too slow
+					speedB = SPEED_NORM/1.5;
+					cp2 = 1;
+
+				} else if (cp1 == 0){
 					set_speed(SPEED_SLOW, SPEED_NORM);
-					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
-					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
+					speedA = SPEED_SLOW;
+					speedB = SPEED_NORM;
+					cp1 = 1;
+				}
+				__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
+				__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, pwm_outA); // PWM to Motor A (IN2)
+				TIM4->EGR | TIM_EGR_UG;
+				TIM4->SR &= ~TIM_SR_UIF;
 
-					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
-					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
-				} else {
-					set_speed(SPEED_NORM, SPEED_HIGH);
-					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
-					__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, speedA); // PWM to Motor A (IN2)
-
-					__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, speedB);
-					__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
+				__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, pwm_outB);
+				__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
+				TIM9->EGR | TIM_EGR_UG;
+				TIM9->SR &= ~TIM_SR_UIF;
+				if (cnt > 1000){
+					sprintf(buf , "%d, %d", pwm_outA, pwm_outB);
+					send(buf);
+					cnt = 0;
 				}
 			}
 			else {
 				stop();
 				turn(SERVO_STRAIGHT);
+				turn_in_place_flag = 0;
+				cp1 = 0;
+				cp2 = 0;
+				osDelay(100);
 				return;
 			}
 		}
@@ -899,12 +956,34 @@ void move_by_dist(int dir, int dist_target){
 		} else if (cp2 == 0 && dist_to_go <= 100){
 			tmp_a = speedA_target / 2 < SPEED_MIN ? SPEED_MIN : speedA_target / 2;
 			tmp_b = speedB_target / 2 < SPEED_MIN ? SPEED_MIN : speedB_target / 2;
+
+			// IF TURNING, THEN THE OUTER WHEEL MUST PRESERVE THE RATIO. I HARDCODED THIS VALUE SO I PRAY THE RATIO WONT CHANGE LMAO
+			if (speedA_target < speedB_target){
+				if (tmp_a == SPEED_MIN){
+					tmp_b = SPEED_MIN * 2;
+				}
+			} else if (speedB_target < speedA_target){
+				if (tmp_b == SPEED_MIN){
+					tmp_a = SPEED_MIN * 2;
+				}
+			}
 			set_speed(tmp_a, tmp_b);
 			cp2 = 1;
 			//approaching_flag = 0;
 		} else if (cp3 == 0 && dist_to_go <= 50){
 			tmp_a = speedA_target / 2 < SPEED_MIN ? SPEED_MIN : speedA_target / 2;
 			tmp_b = speedB_target / 2 < SPEED_MIN ? SPEED_MIN : speedB_target / 2;
+
+			// IF TURNING, THEN THE OUTER WHEEL MUST PRESERVE THE RATIO. I HARDCODED THIS VALUE SO I PRAY THE RATIO WONT CHANGE LMAO
+			if (speedA_target < speedB_target){
+				if (tmp_a == SPEED_MIN){
+					tmp_b = SPEED_MIN * 2;
+				}
+			} else if (speedB_target < speedA_target){
+				if (tmp_b == SPEED_MIN){
+					tmp_a = SPEED_MIN * 2;
+				}
+			}
 			set_speed(tmp_a, tmp_b);
 			cp3 = 1;
 			//approaching_flag = 0;
@@ -915,36 +994,113 @@ void move_by_dist(int dir, int dist_target){
 }
 
 void calibrate(){
-	// keep moving forward by 10cm. track the actual distance moved. get the cndoer
-	float sum = 0;
-	float dist_moved;
-	float prev_dist = average_dist;
+	// I hate hate hate how it looks. its just copy pasted from the //fw //bw //fr etc.
 
+	// keep moving forward by 10cm. track the actual distance moved. get the cndoer
+	// get error for fw
+	float sums[6] = {0,0,0,0,0,0};
+	float prev_dist = average_dist;
+	float error = 0;
+	int value = 80;
+	char buf[20];
+	send("calibrating...");
+	// getting fw error
 	for (int i =0; i<5; i++){
 		//xQueueSend(commandQueue, "FW 10", portMAX_DELAY);
 
-		set_speed(SPEED_NORM, SPEED_NORM);
+		// fw
+		set_speed(SPEED_SLOW, SPEED_SLOW);
 		straighten_flag = 1;
-		move_by_dist(1, 10);
+		move_by_dist(1, value);
 		straighten_flag = 0;
 
 		osDelay(1000);
-		dist_moved = average_dist;
-		sum += average_dist - prev_dist - 10;
+		sums[0] += average_dist - prev_dist - value;
 		prev_dist = average_dist;
+
+		// bw
+		set_speed(SPEED_SLOW, SPEED_SLOW);
+		straighten_flag = 1;
+		move_by_dist(2, value); //+18 // for some reason, the robot is always short by 2cm.. so lol
+		straighten_flag = 0;
+
+		osDelay(1000);
+		sums[1] += prev_dist - average_dist - value;
+		prev_dist = average_dist;
+
+		// fl
+		set_speed(SPEED_SLOW/2 , SPEED_SLOW); // min to norm is 9:1 ratio.
+		turn_flag = SERVO_LEFT;
+		osDelay(500); // wait for the servo to turn
+		move_by_dist(1, value);
+		turn_flag = SERVO_STRAIGHT;
+
+		osDelay(1000);
+		sums[2] +=  average_dist - prev_dist - value;
+		prev_dist = average_dist;
+
+		//xQueueSend(commandQueue, "FW 10", portMAX_DELAY);
+
+		set_speed(SPEED_SLOW , SPEED_SLOW/2); // min to norm is 9:1 ratio.
+		turn_flag = SERVO_RIGHT;
+		osDelay(500); // wait for the servo to turn
+		move_by_dist(1, value);
+		turn_flag = SERVO_STRAIGHT;
+
+		osDelay(1000);
+		sums[3] +=  average_dist - prev_dist - value;
+		prev_dist = average_dist;
+
+		//xQueueSend(commandQueue, "FW 10", portMAX_DELAY);
+
+		set_speed(SPEED_SLOW, SPEED_SLOW /2 );
+		turn_flag = SERVO_RIGHT;
+		osDelay(500); // wait for the servo to turn
+		move_by_dist(2, value); // 7 to 10 //TODO: this prob has to increase
+		turn_flag = SERVO_STRAIGHT;
+
+		osDelay(1000);
+		sums[4] +=  prev_dist - average_dist  - value;
+		prev_dist = average_dist;
+
+	// BR ERROR
+		//xQueueSend(commandQueue, "FW 10", portMAX_DELAY);
+
+		set_speed(SPEED_SLOW/2, SPEED_SLOW );
+		turn_flag = SERVO_LEFT;
+		osDelay(500); // wait for the servo to turn
+		move_by_dist(2, value); // 7 to 10 //TODO: this prob has to increase
+		turn_flag = SERVO_STRAIGHT;
+
+		osDelay(1000);
+		sums[5] +=  prev_dist - average_dist - value;
+		prev_dist = average_dist;
+
 	}
-	char buf[20];
-	forward_error = sum / 5;
-	sprintf(buf, "%.1f", forward_error);
-	display(buf, 1);
-
-
+	for (int i =0; i<6; i++){
+		errors[i] = sums[i] / 5;
+		sprintf(buf, "ER: %.1f\0", errors[i]);
+		send(buf);
+	}
 }
+
 void set_speed(int sA, int sB){
 	speedA_target = sA;
 	speedB_target = sB;
-	speedA = sA;
-	speedB = sB;
+	//speedA = sA;
+	//speedB = sB;
+
+	// ACCOUNT FOR TURNING RATIO im too tired to make this look nice
+	if (sA < sB){
+		speedA = SPEED_MIN;
+		speedB = SPEED_MIN * 2;
+	} else if (sB < sA){
+		speedA = SPEED_MIN * 2;
+		speedB = SPEED_MIN;
+	} else {
+		speedA = SPEED_MIN;
+		speedB = SPEED_MIN;
+	}
 }
 
 void execute_command_thread(void* args){
@@ -977,6 +1133,7 @@ void execute_command_thread(void* args){
 
 	// make sure the robot is straight before anything
 	turn(SERVO_STRAIGHT);
+
 	for(;;){
 		if(ready_execute == 1){
 			if(xQueueReceive(commandQueue, &cmd, portMAX_DELAY) == pdPASS){
@@ -1012,15 +1169,15 @@ void execute_command_thread(void* args){
 
 					continue;
 					*/
-					set_speed(SPEED_NORM, SPEED_NORM);
+					set_speed(SPEED_SLOW, SPEED_SLOW);
 					straighten_flag = 1;
-					move_by_dist(1, value);
+					move_by_dist(1, value - errors[0]); // -5 // OVERSHOOT BY ~5MM
 					straighten_flag = 0;
 				}
 				if (strcmp(command, commands[1]) == 0){ //BCK
-					set_speed(SPEED_NORM, SPEED_NORM);
+					set_speed(SPEED_SLOW, SPEED_SLOW);
 					straighten_flag = 1;
-					move_by_dist(2, value + 18); // for some reason, the robot is always short by 2cm.. so lol
+					move_by_dist(2, value - errors[1]); //+18 // for some reason, the robot is always short by 2cm.. so lol
 					straighten_flag = 0;
 				}
 				if (strcmp(command, commands[2]) == 0){ //LFT
@@ -1028,55 +1185,60 @@ void execute_command_thread(void* args){
 					osDelay(1000);
 				}
 				if (strcmp(command, commands[3]) == 0){ //CW //testing turn in place
-					turn_in_place(value - 1, 0); // hardcode a -1 for inertia... it feels bad but it kinda works so eh
+					turn_in_place(value, 0); // hardcode a -1 for inertia... it feels bad but it kinda works so eh
 				}
 				if (strcmp(command, commands[4]) == 0){ //CCW //testing turn in place
 					turn_in_place(value, 1);
 				}
 				if (strcmp(command, commands[5]) == 0){ //FL
 					//set_speed(SPEED_SLOW, SPEED_NORM);
-					set_speed(SPEED_NORM /2 , SPEED_NORM); // min to norm is 9:1 ratio.
+					set_speed(SPEED_SLOW /2  , SPEED_SLOW);
 					turn_flag = SERVO_LEFT;
 					osDelay(500); // wait for the servo to turn
-					move_by_dist(1, value);
-					turn_flag = SERVO_STRAIGHT;
 
-					/*
-					// THIS IS 90 DEGREE TURN. VALUE IS IGNORED.
-					target_angle = turned_angle + 90;
+					//move_by_dist(1, value - errors[2]); // this line treats value as a dist
+
+					target_angle = turned_angle + value;
 					move_flag = 1;
 
-					while (turned_angle < target_angle) {
+					while (turned_angle < target_angle - angle_errors[0]) {
+						/*
 						// Slow down when approaching target
 						if (turned_angle > target_angle - 20 ){
 							motor_speed = SPEED_SLOW;
 						}
 						else {
-							osDelay(10);
-						}
+						*/
+						osDelay(1);
 					}
 					move_flag = 0; //stop
-					motor_speed = SPEED_NORM;
-					*/
-
+					osDelay(100); //wait for inertia
 					turn_flag = SERVO_STRAIGHT;
 
 				}
 				if (strcmp(command, commands[6]) == 0){ //FR
-					set_speed(SPEED_NORM, SPEED_NORM / 2);
+					set_speed(SPEED_SLOW, SPEED_SLOW / 2);
 
 					turn_flag = SERVO_RIGHT;
 					osDelay(500); // wait for the servo to turn
-					move_by_dist(1, value);
-					turn_flag = SERVO_STRAIGHT;
-					/*
-					target_angle = turned_angle - 90;
+
+					/* this line treats value as a dist
+					move_by_dist(1, value - errors[3]); //-25 // 20 to 25
+
+					*/
+					target_angle = turned_angle - value;
 					move_flag = 1;
 
+					while (turned_angle > target_angle + angle_errors[1]){ // turning right makes gyro go negative
+						osDelay(1);
+					}
+					move_flag = 0;
+					osDelay(100); //wait for inertia
+					turn_flag = SERVO_STRAIGHT;
+
+					/* Already forcing slow speed
 					while (turned_angle > target_angle) {
 						// Slow down when approaching target
-						sprintf(buf, "%d", turned_angle);
-						display(buf, 3);
 						if (turned_angle < target_angle + 20 ){
 							motor_speed = SPEED_SLOW;
 						}
@@ -1093,11 +1255,21 @@ void execute_command_thread(void* args){
 
 				}
 				if (strcmp(command, commands[7]) == 0){ //BL
-					set_speed(SPEED_NORM, SPEED_NORM /2 );
+					set_speed(SPEED_SLOW, SPEED_SLOW / 2);
 					turn_flag = SERVO_RIGHT;
 					osDelay(500); // wait for the servo to turn
-					move_by_dist(2, value); // BRUH
+					//move_by_dist(2, value - errors[4]); //-10 // 7 to 10 //TODO: this prob has to increase
+
+					target_angle = turned_angle + value;
+					move_flag = 2;
+
+					while (turned_angle < target_angle - angle_errors[2]){ // turning right makes gyro go negative
+						osDelay(1);
+					}
+					move_flag = 0;
+					osDelay(100); //wait for inertia
 					turn_flag = SERVO_STRAIGHT;
+
 					/*
 					target_angle = turned_angle - 90;
 					move_flag = 2;
@@ -1118,11 +1290,21 @@ void execute_command_thread(void* args){
 					*/
 				}
 				if (strcmp(command, commands[8]) == 0){ //BR
-					set_speed(SPEED_NORM / 2, SPEED_NORM);
+					set_speed(SPEED_SLOW / 2, SPEED_SLOW);
 					turn_flag = SERVO_LEFT;
 					osDelay(500); // wait for the servo to turn
-					move_by_dist(2, value); // :( // +18
+					//move_by_dist(2, value - errors[5]); //+10 :( // +18
+
+					target_angle = turned_angle - value;
+					move_flag = 2;
+
+					while (turned_angle > target_angle + angle_errors[3]){ // turning right makes gyro go negative
+						osDelay(1);
+					}
+					move_flag = 0;
+					osDelay(100); //wait for inertia
 					turn_flag = SERVO_STRAIGHT;
+
 					/*
 					target_angle = turned_angle + 90;
 					move_flag = 2;
@@ -1177,6 +1359,9 @@ void execute_command_thread(void* args){
 				// might have to change the motorthread, there is a race condition without this delay...
 
 				//buzz(); // turn on buzzer to show sending ok
+				//char buf5[20];
+				//sprintf(buf5, "OK%d\0", turned_angle);
+				//send(buf5);
 				send("OK!");
 				//osDelay(1000); // change this to 100 later. setting higher for debugging buzzer
 				//buzz(); // turn off
@@ -2043,13 +2228,13 @@ void readICM(void *argument)
 	lastTick = currentTick;
 
 	//display(theta, 1);
-	turned_angle = theta;
+	turned_angle = (int) theta;
 
-	sprintf(buf, "%d", turned_angle);
+	sprintf(buf,"%d", turned_angle);
 	display(buf, 1);
 
 	//sprintf(buf2, "%d", gyro_z_raw);
-	//display(buf2, 3);
+	//display(buf2, 1);
 
 
 	/*
