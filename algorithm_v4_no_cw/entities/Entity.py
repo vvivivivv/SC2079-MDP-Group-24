@@ -40,17 +40,19 @@ FACE_DISTANCES_CM = [15, 20, 25, 30]
 CAMERA_OFFSET_CM = 15.0
 
 # Approach angle offsets from the face normal (degrees).
-# With 75 deg max incidence and wide HFOV, we can approach from steep angles.
-APPROACH_ANGLES_DEG = [-27.5, -25, -15, 0, 15, 25, 27.5]
+# Must stay within SNAP_MAX_INCIDENCE_DEG (25 deg) to ensure the obstacle
+# face is clearly visible and readable.  Tighter angles give more direct
+# line-of-sight to the face at the cost of fewer candidate positions.
+APPROACH_ANGLES_DEG = [-20, -10, 0, 10, 20]
 
 # Safety: virtual obstacle radius
 VIRTUAL_OBS_HALF_CM = 21.0
 
 # Penalty weights (lower = preferred)
 PENALTY_CENTER = 0
-PENALTY_MILD_ANGLE = 1      # 0-15 deg (excellent)
-PENALTY_MODERATE_ANGLE = 2   # 15-30 deg (good)
-PENALTY_STEEP_ANGLE = 4      # 30-45 deg (angled but readable)
+PENALTY_MILD_ANGLE = 2      # 0-15 deg (excellent)
+PENALTY_MODERATE_ANGLE = 12  # 15-30 deg (risky — TSP should prefer direct)
+PENALTY_STEEP_ANGLE = 25     # 30-45 deg (last resort only)
 PENALTY_FAR = 3
 PENALTY_CLOSE = 0
 PENALTY_VERY_CLOSE = 2       # < 18cm (tight but works)
@@ -149,7 +151,7 @@ class Obstacle(CellState):
 
         if retrying:
             distances = [15, 20, 25, 30, 40]
-            angles = [-27.5, -25, -15, -5, 0, 5, 15, 25, 27.5]
+            angles = [-25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25]
 
         for face_dist in distances:
             if face_dist < SNAP_MIN_DIST_CM or face_dist > SNAP_MAX_DIST_CM:
