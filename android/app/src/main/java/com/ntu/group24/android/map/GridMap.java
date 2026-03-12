@@ -33,7 +33,11 @@ public class GridMap extends View {
 
     private final Robot robot = new Robot(1, 1, "N");
     private OnRobotMovedListener robotMovedListener;
-
+    private boolean robotTouched = false;
+    private boolean robotActuallyDragged = false;
+    private float robotDownX = 0f;
+    private float robotDownY = 0f;
+    private static final float ROBOT_TAP_SLOP = 20f;
     private final RectF tempRect = new RectF();
     private final RectF robotRect = new RectF();
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -275,37 +279,6 @@ public class GridMap extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
 
-        if (isDraggingRobot) {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_MOVE: {
-                    Cell c = pointToCellModel(event.getX(), event.getY());
-                    if (c != null) {
-                        int desiredX = c.x - robotDragOffsetX;
-                        int desiredY = c.y - robotDragOffsetY;
-
-                        int maxAnchor = START_CELLS - 3; // 4-3 = 1
-                        int newX = clamp(desiredX, 0, maxAnchor);
-                        int newY = clamp(desiredY, 0, maxAnchor);
-
-                        if (isRobotWithinStartZone(newX, newY) && !robotOverlapsObstacle(newX, newY)) {
-                            robot.setX(newX);
-                            robot.setY(newY);
-                            invalidate();
-                        }
-                    }
-                    return true;
-                }
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL: {
-                    isDraggingRobot = false;
-                    invalidate();
-                    notifyRobotMovement();
-                    return true;
-                }
-            }
-            return true;
-        }
-
         gestureDetector.onTouchEvent(event);
         if (event.getAction() == MotionEvent.ACTION_DOWN) performClick();
 
@@ -313,20 +286,51 @@ public class GridMap extends View {
 
             case MotionEvent.ACTION_DOWN: {
                 if (isTouchOnRobot(event.getX(), event.getY())) {
+                    robotTouched = true;
+                    robotActuallyDragged = false;
+                    robotDownX = event.getX();
+                    robotDownY = event.getY();
+
                     Cell c = pointToCellModel(event.getX(), event.getY());
                     if (c != null) {
                         robotDragOffsetX = c.x - robot.getX();
                         robotDragOffsetY = c.y - robot.getY();
-
-                        isDraggingRobot = true;
-                        getParent().requestDisallowInterceptTouchEvent(true);
-                        return true;
                     }
+                    return true;
                 }
                 break;
             }
 
-            case MotionEvent.ACTION_MOVE:
+            case MotionEvent.ACTION_MOVE: {
+                if (robotTouched) {
+                    float dx = Math.abs(event.getX() - robotDownX);
+                    float dy = Math.abs(event.getY() - robotDownY);
+
+                    if (dx > ROBOT_TAP_SLOP || dy > ROBOT_TAP_SLOP) {
+                        robotActuallyDragged = true;
+                        isDraggingRobot = true;
+                    }
+
+                    if (isDraggingRobot) {
+                        Cell c = pointToCellModel(event.getX(), event.getY());
+                        if (c != null) {
+                            int desiredX = c.x - robotDragOffsetX;
+                            int desiredY = c.y - robotDragOffsetY;
+
+                            int maxAnchor = START_CELLS - 3; // 4-3 = 1
+                            int newX = clamp(desiredX, 0, maxAnchor);
+                            int newY = clamp(desiredY, 0, maxAnchor);
+
+                            if (isRobotWithinStartZone(newX, newY) && !robotOverlapsObstacle(newX, newY)) {
+                                robot.setX(newX);
+                                robot.setY(newY);
+                                invalidate();
+                            }
+                        }
+                        return true;
+                    }
+                }
+
                 if (isDragging && draggingId != null) {
                     Cell c = pointToCellModel(event.getX(), event.getY());
                     if (c != null && !isCellOccupied(c.x, c.y, draggingId)) {
@@ -337,10 +341,26 @@ public class GridMap extends View {
                             invalidate();
                         }
                     }
+                    return true;
                 }
                 break;
+            }
 
-            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_UP: {
+                if (robotTouched) {
+                    if (robotActuallyDragged) {
+                        isDraggingRobot = false;
+                        robotTouched = false;
+                        robotActuallyDragged = false;
+                        invalidate();
+                        notifyRobotMovement(); // keeps Robot (x,y,dir) text updating
+                    } else {
+                        robotTouched = false;
+                        rotateRobotFace(); // tap robot = rotate face
+                    }
+                    return true;
+                }
+
                 if (isDragging && draggingId != null) {
                     Cell finalCell = pointToCellModel(event.getX(), event.getY());
 
@@ -358,14 +378,20 @@ public class GridMap extends View {
                     isDragging = false;
                     draggingId = null;
                     invalidate();
+                    return true;
                 }
                 break;
+            }
 
-            case MotionEvent.ACTION_CANCEL:
+            case MotionEvent.ACTION_CANCEL: {
+                robotTouched = false;
+                robotActuallyDragged = false;
+                isDraggingRobot = false;
                 isDragging = false;
                 draggingId = null;
                 invalidate();
-                break;
+                return true;
+            }
         }
 
         return true;
@@ -476,6 +502,31 @@ public class GridMap extends View {
         int screenRowTop = (GRID_SIZE - 1) - (y + 2);
         robotRect.set(originX + x * cellSizePx, originY + screenRowTop * cellSizePx,
                 originX + (x + 3) * cellSizePx, originY + (screenRowTop + 3) * cellSizePx);
+    }
+
+    public void rotateRobotFace() {
+        String dir = robot.getDirection();
+        String nextDir;
+
+        switch (dir) {
+            case "N":
+                nextDir = "E";
+                break;
+            case "E":
+                nextDir = "S";
+                break;
+            case "S":
+                nextDir = "W";
+                break;
+            default:
+                nextDir = "N";
+                break;
+        }
+
+        robot.setDirection(nextDir);
+        invalidate();
+        notifyRobotMovement(); // keeps Robot (x,y,dir) UI updated
+//        broadcastObstacleMapDirty("Pending ROBOT_FACE," + nextDir);
     }
 
     private RectF startZoneRectModel() {

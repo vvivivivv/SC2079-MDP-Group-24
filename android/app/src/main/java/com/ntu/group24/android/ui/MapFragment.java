@@ -183,13 +183,8 @@ public class MapFragment extends Fragment {
             String status = getString(R.string.robot_status_format, trX, trY, direction);
             robotViewModel.setRobotStatus(status);
 
-            MainActivity activity = (MainActivity) getActivity();
-            if (activity != null && activity.getBluetoothService() != null) {
-                String syncCommand = String.format(Locale.US, "ROBOT,%d,%d,%s\n", trX, trY, direction);
-                activity.getBluetoothService().write(syncCommand);
-            } else {
-                isMapDirty = true;
-            }
+            isMapDirty = true;
+            broadcastRobotStatus("Robot updated (Unsynced)");
         });
 
         // Tap empty cell to add obstacle (C.6)
@@ -293,18 +288,18 @@ public class MapFragment extends Fragment {
         // 1. Clear RPi memory
         syncQueue.add("CLEAR");
 
-        // 2. Send all obstacles
+        // 2. Add robot state with latest face
+        int trX = gridMap.getRobot().getX() + 2;
+        int trY = gridMap.getRobot().getY() + 2;
+        String dir = gridMap.getRobot().getDirection();
+        syncQueue.add(String.format(Locale.US, "ROBOT,%d,%d,%s", trX, trY, dir));
+
+        // 3. Send all obstacles
         for (Obstacle o : gridMap.getObstacles().values()) {
             if (o == null) continue;
             syncQueue.add(String.format(Locale.US, Constants.OBSTACLE_ADD,
                     o.getId(), o.getX(), o.getY(), o.getFace().name()));
         }
-
-        int trX = gridMap.getRobot().getX() + 2;
-        int trY = gridMap.getRobot().getY() + 2;
-        String dir = gridMap.getRobot().getDirection();
-        String robotMsg = String.format(Locale.US, "ROBOT,%d,%d,%s", trX, trY, dir);
-        activity.getBluetoothService().write(robotMsg);
 
         Toast.makeText(requireContext(), "Syncing map (0.5s delay)...", Toast.LENGTH_SHORT).show();
         processSyncQueue(syncQueue, activity);
