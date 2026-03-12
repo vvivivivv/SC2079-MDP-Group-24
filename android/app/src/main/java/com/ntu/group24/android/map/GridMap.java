@@ -161,10 +161,10 @@ public class GridMap extends View {
         obstacleIdTextPaint.setColor(Color.WHITE);
         obstacleIdTextPaint.setTextAlign(Paint.Align.CENTER);
         obstacleIdTextPaint.setTypeface(Typeface.DEFAULT_BOLD);
-        obstacleIdTextPaint.setTextSize(28f);
+        obstacleIdTextPaint.setTextSize(20f);
 
         faceLinePaint.setColor(Color.RED);
-        faceLinePaint.setStrokeWidth(8f);
+        faceLinePaint.setStrokeWidth(3f);
         faceLinePaint.setStyle(Paint.Style.STROKE);
 
         gestureDetector = new GestureDetector(getContext(), new GestureDetector.SimpleOnGestureListener() {
@@ -253,7 +253,7 @@ public class GridMap extends View {
     }
 
     private void drawFaceLine(Canvas canvas, RectF rect, Obstacle.Dir face) {
-        float pad = 6f;
+        float pad = 3f;
         switch (face) {
             case N: canvas.drawLine(rect.left + pad, rect.top + pad, rect.right - pad, rect.top + pad, faceLinePaint); break;
             case E: canvas.drawLine(rect.right - pad, rect.top + pad, rect.right - pad, rect.bottom - pad, faceLinePaint); break;
