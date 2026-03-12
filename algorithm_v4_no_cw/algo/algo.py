@@ -553,6 +553,7 @@ class MazeSolver:
 
         commands.append("FIN")
         commands = self._compress_commands(commands)
+        commands = self._insert_opportunistic_snaps(commands, obstacles_data)
 
         t_plan = time.time() - t1
         print(f"Phase 2 (RS/A*): {t_plan:.2f}s")
@@ -588,3 +589,51 @@ class MazeSolver:
                     pass
             compressed.append(cmd)
         return compressed
+
+    @staticmethod
+    def _insert_opportunistic_snaps(commands, obstacles_data):
+        """Insert one extra SNAP before and one after each primary SNAP.
+
+        For each SNAP{id}, inserts a duplicate SNAP:
+          - after the move command immediately before the SNAP
+          - after the move command immediately after the SNAP
+        """
+        if not obstacles_data:
+            return commands
+
+        # Find primary SNAP indices
+        snap_info = []
+        for i, cmd in enumerate(commands):
+            if cmd.startswith("SNAP"):
+                try:
+                    ob_id = int(cmd[4:])
+                    snap_info.append((i, ob_id))
+                except ValueError:
+                    pass
+
+        # Collect insertion points
+        insert_list = []
+
+        for snap_idx, ob_id in snap_info:
+            snap_cmd = f"SNAP{ob_id}"
+
+            # 1 command before: after the command two steps before the SNAP
+            j = snap_idx - 2
+            if j >= 0 and not commands[j].startswith("SNAP") and not commands[j].startswith("FIN"):
+                insert_list.append((j, snap_cmd))
+
+            # 1 command after the SNAP
+            j = snap_idx + 1
+            if j < len(commands) and not commands[j].startswith("SNAP") and not commands[j].startswith("FIN"):
+                insert_list.append((j, snap_cmd))
+
+        if not insert_list:
+            return commands
+
+        # Insert from end to preserve indices
+        insert_list.sort(key=lambda t: t[0], reverse=True)
+        result = list(commands)
+        for idx, snap_cmd in insert_list:
+            result.insert(idx + 1, snap_cmd)
+
+        return result

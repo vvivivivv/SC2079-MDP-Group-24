@@ -40,11 +40,16 @@ FACE_DISTANCES_CM = [15, 20, 25, 30]
 CAMERA_OFFSET_CM = 15.0
 
 # Approach angle offsets from the face normal (degrees).
-# With 75 deg max incidence and wide HFOV, we can approach from steep angles.
-APPROACH_ANGLES_DEG = [-27.5, -25, -15, 0, 15, 25, 27.5]
+# Must stay within SNAP_MAX_INCIDENCE_DEG (25 deg) to ensure the obstacle
+# face is clearly visible and readable.  Tighter angles give more direct
+# line-of-sight to the face at the cost of fewer candidate positions.
+APPROACH_ANGLES_DEG = [-25, -15, 0, 15, 25]
 
 # Safety: virtual obstacle radius
-VIRTUAL_OBS_HALF_CM = 21.0
+# Conservative value (23cm) keeps the robot body well clear of obstacles
+# during capture positioning.  Tighter values (e.g. 21cm) give more
+# candidate positions but risk clipping obstacles with positioning error.
+VIRTUAL_OBS_HALF_CM = 23.0
 
 # Penalty weights (lower = preferred)
 PENALTY_CENTER = 0
@@ -55,10 +60,7 @@ PENALTY_FAR = 3
 PENALTY_CLOSE = 0
 PENALTY_VERY_CLOSE = 2       # < 18cm (tight but works)
 
-# Wall proximity penalty
-PENALTY_WALL_CRITICAL = 15
-PENALTY_WALL_TIGHT = 8
-PENALTY_WALL_SNUG = 3
+# (No wall proximity penalties — arena has no physical walls)
 
 
 class CellState:
@@ -181,7 +183,9 @@ class Obstacle(CellState):
                     continue
 
                 # 6. Arena bounds
-                ROBOT_HALF_CM = 18.0
+                # No physical walls — allow robot to be near or slightly
+                # past the boundary.  Only reject if center is well outside.
+                ROBOT_HALF_CM = 2.0
                 ARENA_CM = 200.0
                 if (robot_x_cm < ROBOT_HALF_CM or robot_x_cm > ARENA_CM - ROBOT_HALF_CM or
                     robot_y_cm < ROBOT_HALF_CM or robot_y_cm > ARENA_CM - ROBOT_HALF_CM):
@@ -221,23 +225,7 @@ class Obstacle(CellState):
                 elif face_dist < 22:
                     penalty += PENALTY_CLOSE
 
-                # 9. Wall proximity penalty
-                # Only penalize when truly tight. 27cm margin with a 30cm
-                # robot is fine; penalizing it pushes the planner toward
-                # angled approaches that are harder to execute accurately
-                # with asymmetric turning radii.
-                wall_margin = min(
-                    robot_x_cm - ROBOT_HALF_CM,
-                    ARENA_CM - ROBOT_HALF_CM - robot_x_cm,
-                    robot_y_cm - ROBOT_HALF_CM,
-                    ARENA_CM - ROBOT_HALF_CM - robot_y_cm
-                )
-                if wall_margin < 5:
-                    penalty += PENALTY_WALL_CRITICAL
-                elif wall_margin < 12:
-                    penalty += PENALTY_WALL_TIGHT
-                elif wall_margin < 20:
-                    penalty += PENALTY_WALL_SNUG
+                # 9. Wall proximity — no physical walls, skip penalty
 
                 cell = CellState(
                     robot_gx, robot_gy, cardinal,
@@ -248,8 +236,9 @@ class Obstacle(CellState):
 
         cells.sort(key=lambda c: c.penalty)
 
-        # More candidates (wider angles), but cap for TSP
-        MAX_CANDIDATES = 15
+        # Cap candidates for TSP tractability.
+        # Sorted by penalty so the best positions are always kept.
+        MAX_CANDIDATES = 8
         if len(cells) > MAX_CANDIDATES:
             cells = cells[:MAX_CANDIDATES]
 
@@ -315,9 +304,12 @@ class Grid:
                     robot_cy = cand.y * 10
 
                     # Check 1: robot body vs other obstacle virtual zone
+                    # Conservative clearance (+9cm) prevents the robot from
+                    # squeezing between obstacles where positioning error
+                    # could cause a collision.
                     dist = math.sqrt((robot_cx - other_cx)**2 +
                                      (robot_cy - other_cy)**2)
-                    if dist < VIRTUAL_OBS_HALF_CM + 5:
+                    if dist < VIRTUAL_OBS_HALF_CM + 9:
                         blocked = True
                         break
 
