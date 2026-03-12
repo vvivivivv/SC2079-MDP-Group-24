@@ -288,15 +288,16 @@ public class MapFragment extends Fragment {
             return;
         }
 
+        final java.util.List<String> syncQueue = new java.util.ArrayList<>();
+
         // 1. Clear RPi memory
-        activity.getBluetoothService().write("CLEAR");
+        syncQueue.add("CLEAR");
 
         // 2. Send all obstacles
         for (Obstacle o : gridMap.getObstacles().values()) {
             if (o == null) continue;
-            String msg = String.format(Locale.US, Constants.OBSTACLE_ADD,
-                    o.getId(), o.getX(), o.getY(), o.getFace().name());
-            activity.getBluetoothService().write(msg);
+            syncQueue.add(String.format(Locale.US, Constants.OBSTACLE_ADD,
+                    o.getId(), o.getX(), o.getY(), o.getFace().name()));
         }
 
         int trX = gridMap.getRobot().getX() + 2;
@@ -305,8 +306,30 @@ public class MapFragment extends Fragment {
         String robotMsg = String.format(Locale.US, "ROBOT,%d,%d,%s", trX, trY, dir);
         activity.getBluetoothService().write(robotMsg);
 
-        isMapDirty = false;
-        Toast.makeText(requireContext(), "Map fully synced to RPi", Toast.LENGTH_SHORT).show();
+        Toast.makeText(requireContext(), "Syncing map (0.5s delay)...", Toast.LENGTH_SHORT).show();
+        processSyncQueue(syncQueue, activity);
+    }
+
+    private void processSyncQueue(final java.util.List<String> queue, final MainActivity activity) {
+        if (queue.isEmpty()) {
+            isMapDirty = false;
+            broadcastRobotStatus("Map Synced");
+            Toast.makeText(requireContext(), "Map fully synced to RPi", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String msg = queue.remove(0);
+        activity.getBluetoothService().write(msg);
+
+        // Schedule the next command in 500ms
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (isAdded()) {
+                    processSyncQueue(queue, activity);
+                }
+            }
+        }, 500);
     }
 
     private void logComms(String message) {
@@ -315,7 +338,6 @@ public class MapFragment extends Fragment {
         i.putExtra("message", message);
         LocalBroadcastManager.getInstance(requireContext()).sendBroadcast(i);
     }
-
 
     public void handleIncomingCommand(String command) {
         if (gridMap == null || command == null){
