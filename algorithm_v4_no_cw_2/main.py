@@ -22,73 +22,99 @@ def _get_cardinal_direction(theta_rad):
     else:
         return "E"
 
+def _get_top_right_corner(x_center, y_center, theta):
+    """Compute the top-right corner (max x, max y) of the 30x30cm robot.
+
+    The robot is a 30x30cm square centered at (x_center, y_center) rotated
+    by theta.  We compute all 4 corners in world coordinates and return the
+    one with the largest x and largest y (i.e. the top-right in arena frame,
+    regardless of robot heading).
+
+    Returns: (corner_x_cm, corner_y_cm)
+    """
+    half = 15.0  # 30cm / 2
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    # 4 corners in robot-local frame: (±half, ±half)
+    # Rotated to world: (x + dx*cos - dy*sin, y + dx*sin + dy*cos)
+    corners_x = []
+    corners_y = []
+    for dx, dy in [(-half, -half), (-half, half), (half, -half), (half, half)]:
+        wx = x_center + dx * cos_t - dy * sin_t
+        wy = y_center + dx * sin_t + dy * cos_t
+        corners_x.append(wx)
+        corners_y.append(wy)
+    return max(corners_x), max(corners_y)
+
+
 def calculate_positions(start_pose, commands):
     x, y, theta = start_pose
     positions = []
-    
+
     for cmd in commands:
         if cmd.startswith("SNAP") or cmd == "FIN":
-            # Divide by 10 to get the base grid index (24cm -> 2)
-            grid_x = min(19, max(0, int(x / 10.0)))
-            grid_y = min(19, max(0, int(y / 10.0)))
-            
+            # Top-right corner of robot footprint in arena frame
+            tr_x, tr_y = _get_top_right_corner(x, y, theta)
+            grid_x = min(19, max(0, int(tr_x / 10.0)))
+            grid_y = min(19, max(0, int(tr_y / 10.0)))
+
             positions.append({
                 "x": grid_x,
                 "y": grid_y,
                 "direction": _get_cardinal_direction(theta)
             })
             continue
-            
+
         prefix = cmd[:2]
         try:
             dist_mm = float(cmd[2:])
         except ValueError:
             dist_mm = 0.0
-            
+
         if prefix == "FW":
             d_cm = (dist_mm - OFFSET_FW) / SCALE_FW / 10.0
             x += d_cm * math.cos(theta)
             y += d_cm * math.sin(theta)
-            
+
         elif prefix == "BW":
             d_cm = (dist_mm - OFFSET_BW) / SCALE_BW / 10.0
             x -= d_cm * math.cos(theta)
             y -= d_cm * math.sin(theta)
-            
+
         elif prefix == "FL":
-            d_cm = (dist_mm - OFFSET_FL) / SCALE_FL / 10.0
+            angle_deg = dist_mm
+            dtheta = math.radians(angle_deg)
             R = ROBOT_TURN_RADIUS_FL_CM
-            dtheta = d_cm / R
             cx = x - R * math.sin(theta)
             cy = y + R * math.cos(theta)
             theta += dtheta
             x = cx + R * math.sin(theta)
             y = cy - R * math.cos(theta)
-            
+
         elif prefix == "FR":
-            d_cm = (dist_mm - OFFSET_FR) / SCALE_FR / 10.0
+            angle_deg = dist_mm
+            dtheta = math.radians(angle_deg)
             R = ROBOT_TURN_RADIUS_FR_CM
-            dtheta = d_cm / R
             cx = x + R * math.sin(theta)
             cy = y - R * math.cos(theta)
             theta -= dtheta
             x = cx - R * math.sin(theta)
             y = cy + R * math.cos(theta)
-            
+
         elif prefix == "BL":
-            d_cm = (dist_mm - OFFSET_BL) / SCALE_BL / 10.0
+            angle_deg = dist_mm
+            dtheta = math.radians(angle_deg)
             R = ROBOT_TURN_RADIUS_BL_CM
-            dtheta = d_cm / R
             cx = x + R * math.sin(theta)
             cy = y - R * math.cos(theta)
             theta += dtheta
             x = cx - R * math.sin(theta)
             y = cy + R * math.cos(theta)
-            
+
         elif prefix == "BR":
-            d_cm = (dist_mm - OFFSET_BR) / SCALE_BR / 10.0
+            angle_deg = dist_mm
+            dtheta = math.radians(angle_deg)
             R = ROBOT_TURN_RADIUS_BR_CM
-            dtheta = d_cm / R
             cx = x - R * math.sin(theta)
             cy = y + R * math.cos(theta)
             theta -= dtheta
@@ -97,16 +123,17 @@ def calculate_positions(start_pose, commands):
 
         theta = (theta + math.pi) % (2 * math.pi) - math.pi
 
-        # Divide by 10 to get the base grid index (24cm -> 2)
-        grid_x = min(19, max(0, int(x / 10.0)))
-        grid_y = min(19, max(0, int(y / 10.0)))
+        # Top-right corner of robot footprint in arena frame
+        tr_x, tr_y = _get_top_right_corner(x, y, theta)
+        grid_x = min(19, max(0, int(tr_x / 10.0)))
+        grid_y = min(19, max(0, int(tr_y / 10.0)))
 
         positions.append({
             "x": grid_x,
             "y": grid_y,
             "direction": _get_cardinal_direction(theta)
         })
-        
+
     return positions
 
 app = Flask(__name__)
@@ -158,6 +185,7 @@ def path_finding():
     #     },
     #     "error": None
     # })
+
     return jsonify({
         "data": {
             'distance': distance,

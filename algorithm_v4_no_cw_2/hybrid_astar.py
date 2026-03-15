@@ -396,26 +396,28 @@ def hybrid_astar_search(start, goal, obstacles_expanded,
 # =============================================================================
 
 def path_to_commands(path):
-    """Convert Hybrid A* path to drive commands (distances in mm).
+    """Convert Hybrid A* path to drive commands.
 
-    Distances are corrected using empirical calibration constants
-    (SCALE_xx and OFFSET_xx) so the real robot matches the simulator.
+    Straight commands (FW/BW): value = distance in mm (with calibration).
+    Arc commands (FL/FR/BL/BR): value = heading change in degrees.
 
     Commands:
-      S  -> FW{dist_mm}   forward straight
-      B  -> BW{dist_mm}   backward straight
-      L  -> FL{dist_mm}   full-lock left, forward
-      R  -> FR{dist_mm}   full-lock right, forward
-      BL -> BL{dist_mm}   full-lock left, backward
-      BR -> BR{dist_mm}   full-lock right, backward
+      S  -> FW{dist_mm}     forward straight
+      B  -> BW{dist_mm}     backward straight
+      L  -> FL{angle_deg}   full-lock left, forward
+      R  -> FR{angle_deg}   full-lock right, forward
+      BL -> BL{angle_deg}   full-lock left, backward
+      BR -> BR{angle_deg}   full-lock right, backward
     """
-    _MOVE_MAP = {
+    _STRAIGHT_MAP = {
         'S':  ('FW', SCALE_FW, OFFSET_FW),
         'B':  ('BW', SCALE_BW, OFFSET_BW),
-        'L':  ('FL', SCALE_FL, OFFSET_FL),
-        'R':  ('FR', SCALE_FR, OFFSET_FR),
-        'BL': ('BL', SCALE_BL, OFFSET_BL),
-        'BR': ('BR', SCALE_BR, OFFSET_BR),
+    }
+    _ARC_MAP = {
+        'L':  ('FL', TURN_RADIUS_FL_CM),
+        'R':  ('FR', TURN_RADIUS_FR_CM),
+        'BL': ('BL', TURN_RADIUS_BL_CM),
+        'BR': ('BR', TURN_RADIUS_BR_CM),
     }
 
     if not path or len(path) < 2:
@@ -433,13 +435,17 @@ def path_to_commands(path):
 
     commands = []
     for move_type, count in segments:
-        entry = _MOVE_MAP.get(move_type)
-        if entry is None:
-            continue
-        prefix, scale, offset = entry
-        center_arc_mm = STEP_SIZE_CM * count * 10
-        dist_mm = max(10, round(center_arc_mm * scale + offset))
-        commands.append(f"{prefix}{dist_mm}")
+        if move_type in _STRAIGHT_MAP:
+            prefix, scale, offset = _STRAIGHT_MAP[move_type]
+            center_arc_mm = STEP_SIZE_CM * count * 10
+            dist_mm = max(10, round(center_arc_mm * scale + offset))
+            commands.append(f"{prefix}{dist_mm}")
+        elif move_type in _ARC_MAP:
+            prefix, radius = _ARC_MAP[move_type]
+            arc_length_cm = STEP_SIZE_CM * count
+            angle_deg = math.degrees(arc_length_cm / radius)
+            angle_deg = max(1, round(angle_deg))
+            commands.append(f"{prefix}{angle_deg}")
 
     return commands
 

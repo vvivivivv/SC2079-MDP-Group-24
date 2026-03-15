@@ -421,33 +421,33 @@ class Robot:
         req_steering_bl = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BL_CM)
         req_steering_br = math.atan(ROBOT_WHEELBASE_CM / ROBOT_TURN_RADIUS_BR_CM)
 
-        # 1. ARC MOVES (FL, FR, BL, BR) — distances arrive in mm (empirically corrected)
-        #    Simulator uses center-arc physics, so undo the calibration correction.
-        #    commanded_mm = center_arc_mm * SCALE + OFFSET
-        #    => center_arc_mm = (commanded_mm - OFFSET) / SCALE
+        # 1. ARC MOVES (FL, FR, BL, BR) — values are now ANGLE in degrees.
+        #    We convert angle to center-arc distance for the bicycle model:
+        #    arc_length_cm = angle_rad * turning_radius
         if cmd[:2] in ["FR", "FL", "BR", "BL"]:
             try:
                 raw_suffix = cmd[2:]
                 if '_' in raw_suffix:
-                    dist_mm = int(raw_suffix.split('_')[1])
+                    angle_deg = int(raw_suffix.split('_')[1])
                 else:
-                    dist_mm = int(raw_suffix)
+                    angle_deg = int(raw_suffix)
 
-                # Undo empirical correction: commanded_mm → center_arc_cm
+                angle_rad = math.radians(angle_deg)
+
                 if cmd.startswith("FL"):
-                    self.target_val = (dist_mm - OFFSET_FL) / SCALE_FL / 10.0
+                    self.target_val = angle_rad * ROBOT_TURN_RADIUS_FL_CM
                     self.velocity = CURRENT_SPEED
                     self.steering_angle = req_steering_fl
                 elif cmd.startswith("FR"):
-                    self.target_val = (dist_mm - OFFSET_FR) / SCALE_FR / 10.0
+                    self.target_val = angle_rad * ROBOT_TURN_RADIUS_FR_CM
                     self.velocity = CURRENT_SPEED
                     self.steering_angle = -req_steering_fr
                 elif cmd.startswith("BL"):
-                    self.target_val = (dist_mm - OFFSET_BL) / SCALE_BL / 10.0
+                    self.target_val = angle_rad * ROBOT_TURN_RADIUS_BL_CM
                     self.velocity = -CURRENT_SPEED
                     self.steering_angle = -req_steering_bl
                 elif cmd.startswith("BR"):
-                    self.target_val = (dist_mm - OFFSET_BR) / SCALE_BR / 10.0
+                    self.target_val = angle_rad * ROBOT_TURN_RADIUS_BR_CM
                     self.velocity = -CURRENT_SPEED
                     self.steering_angle = req_steering_br
 
@@ -655,6 +655,7 @@ def main():
                             elif ob.direction == 180: d_api = 4
                             elif ob.direction == 270: d_api = 6
                             payload["obstacles"].append({ "x": ob.col, "y": ob.row, "id": ob.id, "d": d_api })
+                            print(payload)
 
                         print("Sending request...")
                         try:
@@ -748,6 +749,20 @@ def main():
             s = grid_to_pixel(0, i * 10); e = grid_to_pixel(GRID_SIZE, i * 10)
             pygame.draw.line(screen, GRAY, s, e)
 
+        # Axis labels (0-19) — bottom for X, left for Y
+        label_font = pygame.font.SysFont(None, 18)
+        cell_px = ARENA_WIDTH / GRID_COLS
+        for i in range(GRID_COLS):
+            # X-axis labels along the bottom
+            lx = int(i * cell_px + cell_px / 2)
+            ly = WINDOW_HEIGHT - 2  # just inside bottom edge
+            x_label = label_font.render(str(i), True, BLACK)
+            screen.blit(x_label, (lx - x_label.get_width() // 2, ly - x_label.get_height()))
+            # Y-axis labels along the left
+            ry = int(WINDOW_HEIGHT - (i * cell_px + cell_px / 2))
+            y_label = label_font.render(str(i), True, BLACK)
+            screen.blit(y_label, (2, ry - y_label.get_height() // 2))
+
         # Start Zone
         box_px = int((40 / GRID_SIZE) * ARENA_WIDTH)
         s = pygame.Surface((box_px, box_px)); s.set_alpha(100); s.fill(GREEN)
@@ -820,6 +835,20 @@ def main():
         pygame.draw.rect(screen, BLACK, auto_play_btn, 2)
         auto_text = "AUTO: OFF" if robot.step_mode else "AUTO: ON"
         screen.blit(font.render(auto_text, True, BLACK), (ARENA_WIDTH + 40, 702))
+
+        # Hover tooltip: show grid coordinate under cursor
+        grid_cell = pixel_to_grid(mouse_x, mouse_y)
+        if grid_cell is not None:
+            col, row = grid_cell
+            if 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS:
+                tip_text = font.render(f"({col}, {row})", True, BLACK)
+                tip_bg = pygame.Surface((tip_text.get_width() + 8, tip_text.get_height() + 4), pygame.SRCALPHA)
+                tip_bg.fill((255, 255, 255, 200))
+                # Position tooltip offset from cursor, keep it on screen
+                tip_x = min(mouse_x + 15, WINDOW_WIDTH - tip_text.get_width() - 12)
+                tip_y = max(mouse_y - 25, 0)
+                screen.blit(tip_bg, (tip_x - 4, tip_y - 2))
+                screen.blit(tip_text, (tip_x, tip_y))
 
         pygame.display.flip()
         clock.tick(FPS)

@@ -213,24 +213,37 @@ def check_rs_path_collision(start, end, radius, obstacles_expanded,
 
 
 def rs_segments_to_commands(segments):
-    _CMD_MAP = {
+    """Convert RS segments to drive commands.
+    
+    Straight commands (FW/BW): value = distance in mm (with calibration).
+    Arc commands (FL/FR/BL/BR): value = heading change in degrees.
+    """
+    # Map (seg_type, gear) -> (command_prefix, turning_radius)
+    _ARC_CMD_MAP = {
+        ('L', 'F'): ('FL', ROBOT_TURN_RADIUS_FL_CM),
+        ('L', 'B'): ('BR', ROBOT_TURN_RADIUS_BR_CM),
+        ('R', 'F'): ('FR', ROBOT_TURN_RADIUS_FR_CM),
+        ('R', 'B'): ('BL', ROBOT_TURN_RADIUS_BL_CM),
+    }
+    _STRAIGHT_CMD_MAP = {
         ('S', 'F'): ('FW', SCALE_FW, OFFSET_FW),
         ('S', 'B'): ('BW', SCALE_BW, OFFSET_BW),
-        ('L', 'F'): ('FL', SCALE_FL, OFFSET_FL),
-        ('L', 'B'): ('BR', SCALE_BR, OFFSET_BR),
-        ('R', 'F'): ('FR', SCALE_FR, OFFSET_FR),
-        ('R', 'B'): ('BL', SCALE_BL, OFFSET_BL),
     }
 
     commands = []
     for seg_type, length_cm, gear in segments:
-        entry = _CMD_MAP.get((seg_type, gear))
-        if entry is None:
-            continue
-        prefix, scale, offset = entry
-        center_arc_mm = length_cm * 10
-        dist_mm = max(10, round(center_arc_mm * scale + offset))
-        commands.append(f"{prefix}{dist_mm}")
+        key = (seg_type, gear)
+        if key in _STRAIGHT_CMD_MAP:
+            prefix, scale, offset = _STRAIGHT_CMD_MAP[key]
+            center_arc_mm = length_cm * 10
+            dist_mm = max(10, round(center_arc_mm * scale + offset))
+            commands.append(f"{prefix}{dist_mm}")
+        elif key in _ARC_CMD_MAP:
+            prefix, radius = _ARC_CMD_MAP[key]
+            # angle = arc_length / radius (in radians), convert to degrees
+            angle_deg = math.degrees(length_cm / radius)
+            angle_deg = max(1, round(angle_deg))
+            commands.append(f"{prefix}{angle_deg}")
     return commands
 
 
@@ -565,12 +578,59 @@ class MazeSolver:
 
         commands.append("FIN")
         commands = self._compress_commands(commands)
+        commands = self._add_surrounding_snaps(commands)
+
+        # Insurance Instructions (added after compression/surrounding-snaps
+        # so they don't get extra SNAPs inserted around them)
+        fin_idx = commands.index("FIN")
+        insurance = [
+            "BL20",
+            f"SNAP{wp_to.screenshot_id}",
+            "FR20",
+            "BR30",
+            f"SNAP{wp_to.screenshot_id}",
+        ]
+        commands[fin_idx:fin_idx] = insurance
 
         t_plan = time.time() - t1
         print(f"Phase 2 (RS/A*): {t_plan:.2f}s")
         print(f"Total: {t_tsp + t_plan:.2f}s, {len(commands)} commands")
 
         return commands, waypoint_path, distance
+
+    @staticmethod
+    def _add_surrounding_snaps(commands):
+        """Insert a copy of each SNAP before the preceding command and after the following command.
+        
+        Example: FW50 -> FR23 -> SNAP1 -> BL25 -> FW100
+        Becomes: FW50 -> SNAP1 -> FR23 -> SNAP1 -> BL25 -> SNAP1 -> FW100
+        
+        This gives the robot three image captures per obstacle:
+          1. Before the final approach manoeuvre
+          2. At the planned capture position (original SNAP)
+          3. After the first departure manoeuvre
+        """
+        if not commands:
+            return commands
+
+        # Find all SNAP indices
+        snap_indices = [i for i, cmd in enumerate(commands) if cmd.startswith("SNAP")]
+        if not snap_indices:
+            return commands
+
+        # Build new list with insertions.
+        # We process from right to left so that earlier indices remain valid.
+        result = list(commands)
+        for idx in reversed(snap_indices):
+            snap_cmd = result[idx]
+            # Insert SNAP after the command following the SNAP (if it exists and is a movement)
+            if idx + 1 < len(result) and not result[idx + 1].startswith("SNAP") and not result[idx + 1].startswith("FIN"):
+                result.insert(idx + 2, snap_cmd)
+            # Insert SNAP before the command preceding the SNAP (i.e., before idx-1)
+            if idx - 1 >= 0 and not result[idx - 1].startswith("SNAP") and not result[idx - 1].startswith("FIN"):
+                result.insert(idx - 1, snap_cmd)
+
+        return result
 
     @staticmethod
     def _compress_commands(commands):

@@ -18,10 +18,10 @@ ROBOT_WHEELBASE_CM = 20.0
 #   FR = forward, front swings right   (right steering, forward gear)
 #   BL = backward, front swings left   (right steering, backward gear)
 #   BR = backward, front swings right  (left steering, backward gear)
-ROBOT_TURN_RADIUS_FL_CM = 29.4 #30.1 #32.03 #29.4   # Forward-Left arc radius  (tune this!)
-ROBOT_TURN_RADIUS_FR_CM = 34.1  #30.6   # Forward-Right arc radius (tune this!)
-ROBOT_TURN_RADIUS_BL_CM = 31.6 #30.2   # Back-Left arc radius     (tune this!)
-ROBOT_TURN_RADIUS_BR_CM = 31.0 #28.6 #28.3   # Back-Right arc radius    (tune this!)
+ROBOT_TURN_RADIUS_FL_CM = 28.03 #29.4   # Forward-Left arc radius  (tune this!)
+ROBOT_TURN_RADIUS_FR_CM = 36.25 #30.6   # Forward-Right arc radius (tune this!)
+ROBOT_TURN_RADIUS_BL_CM = 31.92 #30.2   # Back-Left arc radius     (tune this!)
+ROBOT_TURN_RADIUS_BR_CM = 28.92 #28.3   # Back-Right arc radius    (tune this!)
 
 # Derived values used throughout the planner:
 #   MAX: conservative — used for RS direct paths & collision checking
