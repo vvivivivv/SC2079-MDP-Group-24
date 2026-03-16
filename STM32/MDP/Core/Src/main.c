@@ -47,6 +47,7 @@
 /* Private variables ---------------------------------------------------------*/
  I2C_HandleTypeDef hi2c2;
 
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
@@ -67,14 +68,14 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t EncoderTaskHandle;
 const osThreadAttr_t EncoderTask_attributes = {
   .name = "EncoderTask",
-  .stack_size = 256 * 8,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for readICMTask */
 osThreadId_t readICMTaskHandle;
 const osThreadAttr_t readICMTask_attributes = {
   .name = "readICMTask",
-  .stack_size = 256 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
@@ -142,7 +143,6 @@ const float Kp_straight = 12.0f; // 左�?��?�步 Kp
 // 2. 外部调用的 PWM 最终输出值
 volatile int pwm_outA = 0;
 volatile int pwm_outB = 0;
-/* USER CODE END PV */
 
 //UART Buffer
 uint8_t rxBuffer[120];
@@ -225,6 +225,7 @@ static void MX_TIM4_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_TIM9_Init(void);
+static void MX_TIM1_Init(void);
 void StartDefaultTask(void *argument);
 void encoder(void *argument);
 void readICM(void *argument);
@@ -350,170 +351,6 @@ void move(int direction){
 //        osDelay(10); // 物�?�刷新�?�以快一点
 //    }
 //}
-
-void encoder(void *argument)
-{
-    /* --- 1. 定义 PID 参数 --- */
-    const int TARGET_TICK = 160;     // 50ms内期望的脉冲数（根据你的电机调整）
-    const float Kp_speed = 12.0f;    // 速度环：补偿摩擦力
-    const float Kp_sync = 10.0f;     // 同步环：修正左右位移差
-
-    int16_t CA, CB, prevCA = 0, prevCB = 0;
-    prevCA = __HAL_TIM_GET_COUNTER(&htim2);
-    prevCB = __HAL_TIM_GET_COUNTER(&htim3);
-
-    for(;;)
-    {
-        // 2. 计算 50ms 增量
-        CA = __HAL_TIM_GET_COUNTER(&htim2);
-        CB = __HAL_TIM_GET_COUNTER(&htim3);
-
-        int16_t Adiff = (int16_t)(CA - prevCA);
-        int16_t Bdiff = (int16_t)(CB - prevCB);
-
-        prevCA = CA;
-        prevCB = CB;
-
-        // 3. 更新累计位移
-        Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-        // 注意：如果你的 B 轮编码器是反向安装，这里用减号
-        Bdist -= (float)Bdiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-        average_dist = (Adist + Bdist) / 2.0f;
-
-        // 4. 核心 PID 控制逻辑
-        if (move_flag == 1 || move_flag == 2 || turn_in_place_flag == 1)
-        {
-            // A. 速度补偿：如果实际速度 < 目标，误差为正，PWM 自动上调
-            float current_speed = (float)abs(Adiff);
-            //float speed_error = speedA_target - current_speed;
-            int speed_error_a = 0;
-            int speed_error_b = 0;
-            int tmp = 0;
-            // 计算基础 PWM：原本设定的 speedA + PID 补偿
-            //int base_pwm_a = speedA_target + (int)(speed_error * Kp_speed);
-
-            current_speed = (float)abs(Bdiff);
-            //speed_error = speedB_target - current_speed ;
-            //int base_pwm_b = speedB_target + (int)(speed_error * Kp_speed);
-            // B. 直线补正：如果 A 跑多了，error 为正，那么 speedA 减小，speedB 增加
-
-            /*
-            float dist_error = Adist - Bdist;
-            int sync_correction = (int)(dist_error * Kp_sync);
-            sync_correction = 0; // testing for now. since turn in place requires the wheels to spin at different speeds, this will cause problems.
-            // 5. 最终输出赋值给全局变量 speedA/B
-            speedA = base_pwm_a - sync_correction;
-            speedB = base_pwm_b + sync_correction;
-            */
-
-            // CHECK THE EXPECTED ENCODER VALUE FOR THE TARGET SPEED.
-            // IF THE ACTUAL ENCODER VALUE IS NOT MATCHING, GRADUALLY INCREASE THE SPEED UNTIL ITS CLOSE ENOUGH.
-
-            if (speedA_target > SPEED_MIN){
-            	// only do it if its at least of a certain speed
-				if (abs(Adiff) < abs(pwm_to_encoder(speedA_target))){
-					speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target) - abs(Adiff));
-					/*
-					if (approaching_flag){
-						speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target / 2) - abs(Adiff));
-						//tmp = speedA_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedA_target/SLOW_DOWN_RATIO;
-						//speed_error_a = encoder_to_pwm(pwm_to_encoder(tmp - abs(Adiff)));
-					}
-					*/
-				}
-            }
-
-            if (speedB_target > SPEED_MIN){
-				// only do it if its at least of a certain speed
-				if (abs(Bdiff) < abs(pwm_to_encoder(speedB_target))){
-					speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target) - abs(Bdiff));
-					//tmp = speedB_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedB_target/SLOW_DOWN_RATIO;
-					/*
-					if (approaching_flag){
-						speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target/2) - abs(Bdiff));
-						//speed_error_b = encoder_to_pwm(pwm_to_encoder(tmp - abs(Bdiff)));
-					}
-					*/
-				}
-			}
-
-            //char buf5[20];
-            //sprintf(buf5, "%d, %d", (int) encoder_to_pwm(Adiff), (int) encoder_to_pwm(Bdiff));
-            //send(buf5);
-
-            //speedA = speedA_target + speed_error_a;
-            //speedB = speedB_target + speed_error_b;
-
-            // TRY TO ACCELERATE INTO THE TARGET SPEED INSTEAD OF INSTANTLY
-            //speedA = (speedA + speedA_target + speed_error_a) / 2;
-            //speedB = (speedB + speedB_target + speed_error_b) / 2;
-            const int INCREMENT_STEP = 100; // only increments by 100 at each iteration
-
-
-            if (speedA < speedA_target + speed_error_a){
-            	if ((speedA_target + speed_error_a - speedA) < INCREMENT_STEP){
-            		speedA = speedA_target + speed_error_a;
-            	} else {
-            		if(speedA_target < speedB_target){
-            			speedA += INCREMENT_STEP / 2; // account for turning ratio. hardcoded so ill kms if this ratio ever changes
-            		} else {
-            			speedA += INCREMENT_STEP;
-            		}
-            	}
-            }
-
-            if (speedB < speedB_target + speed_error_b){
-				if ((speedB_target + speed_error_b - speedB) < INCREMENT_STEP){
-					speedB = speedB_target + speed_error_b;
-				} else {
-					if(speedB_target < speedA_target){
-						speedB += INCREMENT_STEP / 2; // account for turning ratio. hardcoded so ill kms if this ratio ever changes
-					} else {
-						speedB += INCREMENT_STEP;
-					}
-				}
-			}
-
-
-            if (approaching_flag){
-            	speedA = speedA_target / 2 + speed_error_a;
-            	speedB = speedB_target / 2 + speed_error_b;
-            	//speedA = (speedA_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedA_target/SLOW_DOWN_RATIO) + speed_error_a;
-            	//speedB = (speedB_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedB_target/SLOW_DOWN_RATIO) + speed_error_b;
-            }
-
-            char buf[20];
-            //sprintf(buf, "S %d, %d, %d", (int)speed_error_a, encoder_to_pwm(abs(Adiff)), (int) speedA_target);
-            sprintf(buf, "S %d, %d, %d", CA, Adiff, Bdiff);
-
-            display(buf, 2);
-
-            // 6. 安全限幅
-            if (speedA > 7000) speedA = 7000; //if (speedA < 500) speedA = 500;
-            if (speedB > 7000) speedB = 7000; //if (speedB < 500) speedB = 500;
-
-            pwm_outA = speedA;
-            pwm_outB = speedB;
-        }
-        else
-        {
-        	pwm_outA = 0;
-            pwm_outB = 0;
-            stop(); // 确保 move_flag 为 0 时彻底停下
-
-        }
-        // 在 encoder 任务的限幅代码后面加上：
-
-        // C. 实时反馈：在 OLED 第二行显示进度
-
-        // OLED 调试信息
-        char buf[30];
-        sprintf(buf, "V:%d D:%.1f", Adiff, average_dist);
-        display((uint8_t*)buf, 3);
-
-        osDelay(50); // 采样周期调至 50ms
-    }
-}
 
 void buzz(){
 	// toggles the buzzer.
@@ -1407,6 +1244,7 @@ int main(void)
   MX_DMA_Init();
   MX_I2C2_Init();
   MX_TIM9_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   OLED_Init();
   IR_Sensors_Init();
@@ -1457,6 +1295,50 @@ int main(void)
   // 确�?队列已�?创建好了 (commandQueue = xQueueCreate...)
 
   /* --- 强行测试代�?结�?� --- */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* creation of EncoderTask */
+  EncoderTaskHandle = osThreadNew(encoder, NULL, &EncoderTask_attributes);
+
+  /* creation of readICMTask */
+  readICMTaskHandle = osThreadNew(readICM, NULL, &readICMTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  oledTaskHandle = osThreadNew(display_thread, NULL, &oledTask_attributes);
+  moveTaskHandle = osThreadNew(testMoveThread, NULL, &moveTask_attributes);
+  turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
+  parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
+  executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
+
+  /* Start scheduler */
+  osKernelStart();
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* creation of EncoderTask */
+  EncoderTaskHandle = osThreadNew(encoder, NULL, &EncoderTask_attributes);
+
+  /* creation of readICMTask */
+  readICMTaskHandle = osThreadNew(readICM, NULL, &readICMTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  oledTaskHandle = osThreadNew(display_thread, NULL, &oledTask_attributes);
+  moveTaskHandle = osThreadNew(testMoveThread, NULL, &moveTask_attributes);
+  turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
+  parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
+  executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
+
+  /* Start scheduler */
+  osKernelStart();
+  /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
   /* creation of defaultTask */
@@ -1596,6 +1478,85 @@ static void MX_I2C2_Init(void)
   /* USER CODE BEGIN I2C2_Init 2 */
 
   /* USER CODE END I2C2_Init 2 */
+
+}
+
+/**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 0;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 7199;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+  HAL_TIM_MspPostInit(&htim1);
 
 }
 
@@ -2024,111 +1985,171 @@ void StartDefaultTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_encoder */
-//void encoder(void *argument)
-//{
+void encoder(void *argument)
+{
   /* USER CODE BEGIN encoder */
-//	int16_t CA, CB, prevCA, prevCB; // this might have to be unsigned for the pid controller. TODO
-//	int32_t Adiff, Bdiff;
-//	int32_t Adiffraw, Bdiffraw;
-//
-//	char buf[20] = "TESTING!";
-//
-//	prevCA = __HAL_TIM_GET_COUNTER(&htim2);
-//	prevCB = __HAL_TIM_GET_COUNTER(&htim3);
-//
-//  /* Infinite loop */
-//  for(;;)
-//  {
-//	  //motor A
-//	  CA = __HAL_TIM_GET_COUNTER(&htim2);
-//	  Adiffraw = (int16_t) CA - prevCA;
-//
-//	  /*
-//	  // checking under/over flow
-//	  if (Adiffraw > 32767){
-//		  Adiff = Adiffraw - 65536;
-//	  }
-//	  if (Adiffraw < -32767){
-//		  Adiff = Adiffraw + 65536;
-//	  }
-//	  */
-//	  prevCA = CA;
-//
-//	  //motor B
-//	  CB = __HAL_TIM_GET_COUNTER(&htim3);
-//	  Bdiffraw = (int16_t) CB - prevCB;
-//
-//	  /*
-//	  // checking under/over flow
-//	  if (Bdiffraw > 32767){
-//		  Bdiff = Bdiffraw - 65536;
-//	  }
-//	  if (Bdiffraw < -32767){
-//		  Bdiff = Bdiffraw + 65536;
-//	  }
-//	  */
-//	  prevCB = CB;
-//
-//	  Adist += (float)Adiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-//	  //Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-//	  Bdist -= (float)Bdiffraw / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-//
-//	  // TODO: THIS PROBABLY OVERFLOWS AFTER A CERTAIN DISTANCE (CA/CB LOOPS BACK TO 0). ACCOUNT FOR THIS
-//	  //Adist = CA / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-//
-//	  //if (CB == 0){
-//	//	  CB = 65536;
-//	 // }
-//	  //Bdist = (65536 - CB) / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-//	  //Bdist = -CB / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
-//
-//	  average_dist = (Adist + Bdist) / 2; // TODO: PID!!!! PID!!
-//	  //itoa(Adist * 1000, buf, 10);
-//	  sprintf(buf, "%d %d Dist: %d", (int)Adiff, (int)Bdiff, (int) average_dist);
-//	  //OLED_ShowString(10,20, buf);
-//	  display(buf, 3);
-//
-//	  // sucky bad feedforward gain compensation because me too dumb for pid controlelr
-//	  // literally just measures the % diff between the wheels and adjusts the pwm value accordingly
-//	  // gpt gave me this idea lol
-//
-//
-//
-//	  /*
-//		// MotorA & MotorB speed difference fix
-//		float headingError = Adist - Bdist;
-//		const float Kp_heading = 1.0f;
-//		const float Ki_heading = 1.0f;
-//		const float Kd_heading = 1.0f;
-//
-//		static float headingIntegral = 0.0f;
-//		static float prevHeadingError = 0.0f;
-//
-//		headingIntegral += headingError;
-//		if(headingIntegral > 100) headingIntegral = 100;
-//		if(headingIntegral < -100) headingIntegral = -100;
-//
-//		float headingDerivative = headingError - prevHeadingError;
-//		prevHeadingError = headingError;
-//		float headingCorrection = Kp_heading * headingError + Ki_heading * headingIntegral + Kd_heading * headingDerivative;
-//
-//		sprintf(buf, "%d", (int)headingCorrection);
-//			  //OLED_ShowString(10,20, buf);
-//		display(buf, 1);
-//
-//		speedA -= headingCorrection;
-//		speedB += headingCorrection;
-//
-//		if (speedA > 7199) speedA = 7199;
-//		if (speedA < 0) speedA = 0;
-//		if (speedB > 7199) speedB = 7199;
-//		if (speedB < 0) speedB = 0;
-//	*/
-//	  vTaskDelay(pdMS_TO_TICKS(1));
-//	  //osDelay(1); // idk why but it breaks if theres no delay.
-//  }
+    /* --- 1. 定义 PID �?�数 --- */
+    const int TARGET_TICK = 160;     // 50ms内期望的脉冲数（根�?�你的电机调整）
+    const float Kp_speed = 12.0f;    // 速度环：补�?�摩擦力
+    const float Kp_sync = 10.0f;     // �?�步环：修正左�?��?移差
+
+    int16_t CA, CB, prevCA = 0, prevCB = 0;
+    prevCA = __HAL_TIM_GET_COUNTER(&htim2);
+    prevCB = __HAL_TIM_GET_COUNTER(&htim3);
+
+    for(;;)
+    {
+        // 2. 计算 50ms 增�?
+        CA = __HAL_TIM_GET_COUNTER(&htim2);
+        CB = __HAL_TIM_GET_COUNTER(&htim3);
+
+        int16_t Adiff = (int16_t)(CA - prevCA);
+        int16_t Bdiff = (int16_t)(CB - prevCB);
+
+        prevCA = CA;
+        prevCB = CB;
+
+        // 3. 更新累计�?移
+        Adist += (float)Adiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+        // 注�?：如果你的 B 轮编�?器是�??�?�安装，这里用�?�?�
+        Bdist -= (float)Bdiff / ENCODER_COUNTS_PER_REVOLUTION * WHEEL_CIRCUMFERENCE_CM;
+        average_dist = (Adist + Bdist) / 2.0f;
+
+        // 4. 核心 PID 控制逻辑
+        if (move_flag == 1 || move_flag == 2 || turn_in_place_flag == 1)
+        {
+            // A. 速度补�?�：如果实际速度 < 目标，误差为正，PWM 自动上调
+            float current_speed = (float)abs(Adiff);
+            //float speed_error = speedA_target - current_speed;
+            int speed_error_a = 0;
+            int speed_error_b = 0;
+            int tmp = 0;
+            // 计算基础 PWM：原本设定的 speedA + PID 补�?�
+            //int base_pwm_a = speedA_target + (int)(speed_error * Kp_speed);
+
+            current_speed = (float)abs(Bdiff);
+            //speed_error = speedB_target - current_speed ;
+            //int base_pwm_b = speedB_target + (int)(speed_error * Kp_speed);
+            // B. 直线补正：如果 A 跑多了，error 为正，那么 speedA �?�?，speedB 增加
+
+            /*
+            float dist_error = Adist - Bdist;
+            int sync_correction = (int)(dist_error * Kp_sync);
+            sync_correction = 0; // testing for now. since turn in place requires the wheels to spin at different speeds, this will cause problems.
+            // 5. 最终输出赋值给全局�?��? speedA/B
+            speedA = base_pwm_a - sync_correction;
+            speedB = base_pwm_b + sync_correction;
+            */
+
+            // CHECK THE EXPECTED ENCODER VALUE FOR THE TARGET SPEED.
+            // IF THE ACTUAL ENCODER VALUE IS NOT MATCHING, GRADUALLY INCREASE THE SPEED UNTIL ITS CLOSE ENOUGH.
+
+            if (speedA_target > SPEED_MIN){
+            	// only do it if its at least of a certain speed
+				if (abs(Adiff) < abs(pwm_to_encoder(speedA_target))){
+					speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target) - abs(Adiff));
+					/*
+					if (approaching_flag){
+						speed_error_a = encoder_to_pwm(pwm_to_encoder(speedA_target / 2) - abs(Adiff));
+						//tmp = speedA_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedA_target/SLOW_DOWN_RATIO;
+						//speed_error_a = encoder_to_pwm(pwm_to_encoder(tmp - abs(Adiff)));
+					}
+					*/
+				}
+            }
+
+            if (speedB_target > SPEED_MIN){
+				// only do it if its at least of a certain speed
+				if (abs(Bdiff) < abs(pwm_to_encoder(speedB_target))){
+					speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target) - abs(Bdiff));
+					//tmp = speedB_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedB_target/SLOW_DOWN_RATIO;
+					/*
+					if (approaching_flag){
+						speed_error_b = encoder_to_pwm(pwm_to_encoder(speedB_target/2) - abs(Bdiff));
+						//speed_error_b = encoder_to_pwm(pwm_to_encoder(tmp - abs(Bdiff)));
+					}
+					*/
+				}
+			}
+
+            //char buf5[20];
+            //sprintf(buf5, "%d, %d", (int) encoder_to_pwm(Adiff), (int) encoder_to_pwm(Bdiff));
+            //send(buf5);
+
+            //speedA = speedA_target + speed_error_a;
+            //speedB = speedB_target + speed_error_b;
+
+            // TRY TO ACCELERATE INTO THE TARGET SPEED INSTEAD OF INSTANTLY
+            //speedA = (speedA + speedA_target + speed_error_a) / 2;
+            //speedB = (speedB + speedB_target + speed_error_b) / 2;
+            const int INCREMENT_STEP = 100; // only increments by 100 at each iteration
+
+
+            if (speedA < speedA_target + speed_error_a){
+            	if ((speedA_target + speed_error_a - speedA) < INCREMENT_STEP){
+            		speedA = speedA_target + speed_error_a;
+            	} else {
+            		if(speedA_target < speedB_target){
+            			speedA += INCREMENT_STEP / 2; // account for turning ratio. hardcoded so ill kms if this ratio ever changes
+            		} else {
+            			speedA += INCREMENT_STEP;
+            		}
+            	}
+            }
+
+            if (speedB < speedB_target + speed_error_b){
+				if ((speedB_target + speed_error_b - speedB) < INCREMENT_STEP){
+					speedB = speedB_target + speed_error_b;
+				} else {
+					if(speedB_target < speedA_target){
+						speedB += INCREMENT_STEP / 2; // account for turning ratio. hardcoded so ill kms if this ratio ever changes
+					} else {
+						speedB += INCREMENT_STEP;
+					}
+				}
+			}
+
+
+            if (approaching_flag){
+            	speedA = speedA_target / 2 + speed_error_a;
+            	speedB = speedB_target / 2 + speed_error_b;
+            	//speedA = (speedA_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedA_target/SLOW_DOWN_RATIO) + speed_error_a;
+            	//speedB = (speedB_target/SLOW_DOWN_RATIO < SPEED_MIN ? SPEED_MIN : speedB_target/SLOW_DOWN_RATIO) + speed_error_b;
+            }
+
+            char buf[20];
+            //sprintf(buf, "S %d, %d, %d", (int)speed_error_a, encoder_to_pwm(abs(Adiff)), (int) speedA_target);
+            sprintf(buf, "S %d, %d, %d", CA, Adiff, Bdiff);
+
+            display(buf, 2);
+
+            // 6. 安全�?幅
+            if (speedA > 7000) speedA = 7000; //if (speedA < 500) speedA = 500;
+            if (speedB > 7000) speedB = 7000; //if (speedB < 500) speedB = 500;
+
+            pwm_outA = speedA;
+            pwm_outB = speedB;
+        }
+        else
+        {
+        	pwm_outA = 0;
+            pwm_outB = 0;
+            stop(); // 确�? move_flag 为 0 时彻底�?�下
+
+        }
+        // 在 encoder 任务的�?幅代�?�?��?�加上：
+
+        // C. 实时�??馈：在 OLED 第二行显示进度
+
+        // OLED 调试信�?�
+        char buf[30];
+        sprintf(buf, "V:%d D:%.1f", Adiff, average_dist);
+        display((uint8_t*)buf, 3);
+
+        osDelay(50); // 采样周期调至 50ms
+    }
   /* USER CODE END encoder */
-//}
+}
 
 /* USER CODE BEGIN Header_readICM */
 /**
