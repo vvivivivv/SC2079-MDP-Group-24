@@ -80,6 +80,14 @@ const osThreadAttr_t readICMTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 
+//ultrasonic
+osThreadId_t ultrasonicTaskHandle;
+const osThreadAttr_t ultrasonicTask_attributes = {
+  .name = "UltrasonicTask",
+  .stack_size = 256 * 8,
+  .priority = (osPriority_t) osPriorityLow,
+};
+
 // Multitasking threads TODO: untested
 osThreadId_t oledTaskHandle;
 const osThreadAttr_t oledTask_attributes = {
@@ -112,7 +120,7 @@ const osThreadAttr_t parseCommandTask_attributes = {
 osThreadId_t executeCommandTaskHandle;
 const osThreadAttr_t executeCommandTask_attributes = {
   .name = "ExecuteCommandTask",
-  .stack_size = 256 * 8,
+  .stack_size = 256 * 12,
   .priority = (osPriority_t) osPriorityLow,
 };
 
@@ -173,7 +181,9 @@ volatile int turn_in_place_flag = 0; // set when doing turn in place so that the
 
 const int SPEED_MAX = 7190;
 const int SPEED_HIGH = 6000;
+const int SPEED_NORM_HIGH = 4500;
 const int SPEED_NORM = 3000;
+const int SPEED_NORM_LOW = 2000;
 const int SPEED_SLOW = 1500;
 const int SPEED_VERY_SLOW = 700;
 const int SPEED_MIN = 700;
@@ -212,6 +222,19 @@ float backward_error = 0;
 // float errors[6] = {5, -18, 0, +25, 10, -10}; // fw, bw, fl, fr, bl, br. i forgor how to dict in C
 float errors[6] = {6, 7, 13, 14, 15, 13};
 int angle_errors[4] = {2,2,1,2,1}; // fl fr bl br cw
+
+//Ultrasonic Variables
+int ultrasonicReady = 0;
+int ultraTrigger = 1; // 0 if Trigger not sent yet | 1 if Trigger is sent
+
+int echoStart = 0;
+int echoStop = 0;
+int echoDiff = 0;
+float ultraDist = 0;
+
+int task2_done = 0;
+#define CMD_LEN 40
+char task2_buf[CMD_LEN];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -299,7 +322,177 @@ void stop(){
 	*/
 }
 
+float check_ultrasonic(){
+	// turn on flag
+	ultraTrigger = 0;
+	// get and return result
+	while (ultraTrigger != 2){
+		osDelay(1);
+	}
 
+	return ultraDist;
+
+}
+void task2(){
+	int u_dist;
+	task2_done = 0;
+
+	char buf[20];
+	int next_dir = 0; // 0 for left, 1 for right?
+
+	int angle_cp;
+	// 1. check ultrasonic dist
+
+	// 2. move until 30cm from the wall (let this be point A)
+
+	// temp valule
+	//u_dist = 500;
+	//sprintf(task2_buf, "FW %d", u_dist - 300);
+	//xQueueSend(commandQueue, task2_buf, portMAX_DELAY);
+
+	// 3. wait until rpi says left / right
+
+	// 4. hardcoded left / right
+	if (next_dir == 0){
+		//xQueueSend(commandQueue, "FL 40", 0); // to be tested
+		//xQueueSend(commandQueue, "FR 80", 0);
+		//xQueueSend(commandQueue, "FL 40", 0);
+		fl(40,0);
+		osDelay(150);
+		fr(40,0);
+		fr(40,0);
+		osDelay(150);
+		fl(40,0);
+		//osDelay(5000);
+	}
+
+	// 4.5 use ultra to check how close it is
+	// for now, move backwards a bit to account for the next turn
+
+	bw(200);
+
+	// 5. repeat 1-3.
+
+	// 6. hardcode turn left / right
+	if (next_dir == 0){
+		//xQueueSend(commandQueue, "FL 90", 0); // to be tested
+		fl(90, 0);
+	}
+
+	// 7. follow ir sensor until wall disappears
+	if (next_dir == 0){
+		if (irSense(1) == 0){ // assuming have not overshot the wall. 0 is detected
+			while (irSense(1) == 0){ // keep going until overshot
+				fw(50); // chang ethis
+			}
+		}
+		buzz();
+		osDelay(1000);
+		buzz();
+	}
+	// 8. uturn
+	angle_cp = turned_angle;
+	if (next_dir == 0){
+		set_speed(SPEED_NORM_HIGH, SPEED_MIN);
+		//set_speed(SPEED_NORM_LOW, SPEED_NORM_LOW / 2.5);
+		turn_flag = SERVO_RIGHT;
+		osDelay(100); // wait for the servo to turn
+
+		/* this line treats value as a dist
+		move_by_dist(1, value - errors[3]); //-25 // 20 to 25
+
+		*/
+		target_angle = turned_angle - 90;
+		move_flag = 1;
+
+		while (turned_angle > target_angle + angle_errors[1]){ // turning right makes gyro go negative
+			osDelay(1);
+		}
+		move_flag = 0;
+		turn_flag = SERVO_STRAIGHT;
+
+		bw(300, 0);
+
+		set_speed(SPEED_NORM_HIGH, SPEED_MIN);
+		//set_speed(SPEED_NORM_LOW, SPEED_NORM_LOW / 2.5);
+		turn_flag = SERVO_RIGHT;
+		osDelay(100); // wait for the servo to turn
+
+		/* this line treats value as a dist
+		move_by_dist(1, value - errors[3]); //-25 // 20 to 25
+
+		*/
+		target_angle = turned_angle - 90;
+		move_flag = 1;
+
+		while (turned_angle > target_angle + angle_errors[1]){ // turning right makes gyro go negative
+			osDelay(1);
+		}
+		move_flag = 0;
+		turn_flag = SERVO_STRAIGHT;
+	}
+	osDelay(1000);
+
+	// 9. follow ir sensor until wall disappears
+	if (next_dir == 0){
+		if (irSense(1) == 0){ // assuming have not overshot the wall. 0 is detected
+			while (irSense(1) == 0){ // keep going until overshot
+				fw(50); // chang ethis
+			}
+		}
+		buzz();
+		osDelay(1000);
+		buzz();
+	}
+	// 10. turn back and move straight until approx point A (measure distance moved since A?)
+	if (next_dir == 0){
+		//fr(90);
+		// anticipate the uturn to overshoot.
+		target_angle = abs(angle_cp) + 90 + 180 - abs(turned_angle);
+		sprintf(buf, "%d %d %d", angle_cp, turned_angle, target_angle);
+		send(buf);
+		fr(target_angle);
+	}
+	return;
+	// 10. 45 degree turn into the carpark
+
+	if (next_dir == 0){
+		xQueueSend(commandQueue, "FR 45", 0); // to be tested
+		xQueueSend(commandQueue, "FW 100", 0);
+	}
+}
+
+void irSense(int dir){
+	// for now just turn on the buzzer
+	// dir =0 for left, 1 for right
+	if (dir == 0)
+		return IR_LeftDetected(); //0 means something is there.
+	else
+		return IR_RightDetected();
+	/*
+	if (dir == 0){
+		return IR_LeftDetected() == 0){
+				buzz();
+				osDelay(1000);
+				buzz();
+				return;
+			}
+			osDelay(1);
+		}
+	}
+	if (dir == 1){
+		while (1){
+			if (IR_RightDetected() == 0){
+				buzz();
+				osDelay(1000);
+				buzz();
+				return;
+			}
+			osDelay(1);
+		}
+	}
+	*/
+}
 void move(int direction){
     if (direction == 1){ // �?进
         __HAL_TIM_SetCompare(&htim4, TIM_CHANNEL_4, 0);
@@ -731,6 +924,72 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
 //	HAL_UART_Receive_IT(&huart3, &uart_input, 1);
 //}
 //
+
+//Thread for Ultrasonic
+void ultrasonic_thread(void *args){
+ while(1){
+  if(ultraTrigger == 0){
+   char ultrabuf[30];
+   echoStart = 0;
+   echoStop = 0;
+   sprintf(ultrabuf, "Sonic Triggered");
+   display((uint8_t*)ultrabuf, 1);
+   HAL_GPIO_WritePin(TriggerPin_GPIO_Port, TriggerPin_Pin, GPIO_PIN_SET);
+
+   // Allowance for Trigger to wait 10us
+   __HAL_TIM_SET_COUNTER(&htim1, 0);
+   while(__HAL_TIM_GET_COUNTER(&htim1) < 10);
+
+   HAL_GPIO_WritePin(TriggerPin_GPIO_Port, TriggerPin_Pin, GPIO_PIN_RESET);
+   __HAL_TIM_SET_COUNTER(&htim1, 0);
+   while(__HAL_TIM_GET_COUNTER(&htim1) < 60);
+   ultraTrigger = 1;
+  }
+  else if(ultrasonicReady){
+   char ultrabuf[30];
+   sprintf(ultrabuf, "Distance: %.2f", ultraDist);
+   display((uint8_t*)ultrabuf, 1);
+   ultrasonicReady = 0;
+   ultraTrigger = 2;
+  }
+
+  osDelay(10);
+ }
+}
+
+//GPIO Interrupt Handler
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	char buf[20];
+  /* Prevent unused argument(s) compilation warning */
+  UNUSED(GPIO_Pin);
+  /* NOTE: This function Should not be modified, when the callback is needed,
+           the HAL_GPIO_EXTI_Callback could be implemented in the user file
+   */
+
+  if(GPIO_Pin == EchoPin_Pin){
+   if(ultraTrigger){
+    if(HAL_GPIO_ReadPin(EchoPin_GPIO_Port, EchoPin_Pin) == GPIO_PIN_SET){
+     echoStart = __HAL_TIM_GET_COUNTER(&htim1);
+     sprintf(buf, "EchoStart: !%d!\n", echoStart);
+     send(buf);
+    }
+    else if(HAL_GPIO_ReadPin(EchoPin_GPIO_Port, EchoPin_Pin) == GPIO_PIN_RESET){
+     echoStop = __HAL_TIM_GET_COUNTER(&htim1);
+     sprintf(buf, "EchoStop: !%d!\n", echoStop);
+     send(buf);
+     if(echoStop >= echoStart) echoDiff = echoStop - echoStart;
+     else echoDiff = (65535-echoStart) + echoStop;
+     ultraDist = (float) echoDiff / 58.0f;
+     ultrasonicReady = 1;
+     sprintf(buf, "EchoDiff: !%d!\n", echoDiff);
+     send(buf);
+    }
+   }
+  }
+}
+
+
 void parse_command_thread(void* args){
 	for(;;){
 		if (ready_parse == 1){
@@ -924,9 +1183,10 @@ void calibrate(){
 void set_speed(int sA, int sB){
 	speedA_target = sA;
 	speedB_target = sB;
-	//speedA = sA;
-	//speedB = sB;
+	speedA = sA;
+	speedB = sB;
 
+	/*
 	// ACCOUNT FOR TURNING RATIO im too tired to make this look nice
 	if (sA < sB){
 		speedA = SPEED_MIN;
@@ -938,8 +1198,135 @@ void set_speed(int sA, int sB){
 		speedA = SPEED_MIN;
 		speedB = SPEED_MIN;
 	}
+	*/
 }
 
+void fw(int value){
+	//set_speed(SPEED_SLOW, SPEED_SLOW);
+	set_speed(SPEED_HIGH, SPEED_HIGH);
+	straighten_flag = 1;
+	move_by_dist(1, value); // -5 // OVERSHOOT BY ~5MM
+	straighten_flag = 0;
+}
+
+void bw(int value){
+	set_speed(SPEED_HIGH, SPEED_HIGH);
+	straighten_flag = 1;
+	move_by_dist(2, value - errors[1]); //+18 // for some reason, the robot is always short by 2cm.. so lol
+	straighten_flag = 0;
+}
+
+/*
+void fl_task2(value){
+	// trying to get a tighter turn by spinning the wheel different dirs
+	starting_dist = average_dist;
+
+	while starting_dist < average
+	__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0); // set IN1 to maximum PWM (7199) for '1'
+	__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3, pwm_outA); // PWM to Motor A (IN2)
+	TIM4->EGR | TIM_EGR_UG;
+	TIM4->SR &= ~TIM_SR_UIF;
+
+	__HAL_TIM_SetCompare(&htim9,TIM_CHANNEL_2, pwm_outB);
+	__HAL_TIM_SetCompare(&htim9, TIM_CHANNEL_1, 0); // PWM to Motor B (IN2)
+	TIM9->EGR | TIM_EGR_UG;
+	TIM9->SR &= ~TIM_SR_UIF;
+}
+*/
+
+void fl(value, wait){
+	set_speed(SPEED_SLOW /2  , SPEED_SLOW);
+	//set_speed(SPEED_NORM_LOW / 2.5, SPEED_NORM_LOW);
+	turn_flag = SERVO_LEFT;
+	if (wait == 1)	osDelay(500); // wait for the servo to turn
+	//move_by_dist(1, value - errors[2]); // this line treats value as a dist
+
+	target_angle = turned_angle + value;
+	move_flag = 1;
+
+	while (turned_angle < target_angle - angle_errors[0]) {
+		/*
+		// Slow down when approaching target
+		if (turned_angle > target_angle - 20 ){
+			motor_speed = SPEED_SLOW;
+		}
+		else {
+		*/
+		osDelay(1);
+	}
+	move_flag = 0; //stop
+	if (wait == 1)	osDelay(100); //wait for inertia
+	turn_flag = SERVO_STRAIGHT;
+}
+
+void fr(value, wait){
+	set_speed(SPEED_SLOW, SPEED_SLOW / 2);
+	//set_speed(SPEED_NORM_LOW, SPEED_NORM_LOW / 2.5);
+	turn_flag = SERVO_RIGHT;
+	if (wait == 1) osDelay(500); // wait for the servo to turn
+
+	/* this line treats value as a dist
+	move_by_dist(1, value - errors[3]); //-25 // 20 to 25
+
+	*/
+	target_angle = turned_angle - value;
+	move_flag = 1;
+
+	while (turned_angle > target_angle + angle_errors[1]){ // turning right makes gyro go negative
+		osDelay(1);
+	}
+	move_flag = 0;
+	if (wait == 1) osDelay(100); //wait for inertia
+	turn_flag = SERVO_STRAIGHT;
+
+}
+
+void bl(value, wait){
+	set_speed(SPEED_SLOW , SPEED_SLOW/2);
+	//set_speed(SPEED_NORM_LOW / 2.5, SPEED_NORM_LOW);
+	turn_flag = SERVO_RIGHT;
+	if (wait == 1)	osDelay(500); // wait for the servo to turn
+	//move_by_dist(1, value - errors[2]); // this line treats value as a dist
+
+	target_angle = turned_angle + value;
+	move_flag = 2;
+
+	while (turned_angle < target_angle - angle_errors[0]) {
+		/*
+		// Slow down when approaching target
+		if (turned_angle > target_angle - 20 ){
+			motor_speed = SPEED_SLOW;
+		}
+		else {
+		*/
+		osDelay(1);
+	}
+	move_flag = 0; //stop
+	if (wait == 1)	osDelay(100); //wait for inertia
+	turn_flag = SERVO_STRAIGHT;
+}
+
+void br(value, wait){
+	set_speed(SPEED_SLOW/2, SPEED_SLOW);
+	//set_speed(SPEED_NORM_LOW, SPEED_NORM_LOW / 2.5);
+	turn_flag = SERVO_LEFT;
+	if (wait == 1) osDelay(500); // wait for the servo to turn
+
+	/* this line treats value as a dist
+	move_by_dist(1, value - errors[3]); //-25 // 20 to 25
+
+	*/
+	target_angle = turned_angle - value;
+	move_flag = 2;
+
+	while (turned_angle > target_angle + angle_errors[1]){ // turning right makes gyro go negative
+		osDelay(1);
+	}
+	move_flag = 0;
+	if (wait == 1) osDelay(100); //wait for inertia
+	turn_flag = SERVO_STRAIGHT;
+
+}
 void execute_command_thread(void* args){
 	/*
 	 * Command structure (TODO probably will be changed. idk i just put something here to have something to test)
@@ -964,7 +1351,7 @@ void execute_command_thread(void* args){
 
 	const char *commands[] = {"FW\0", "BW\0", "LFT\0", "CW\0", "CCW\0"
 			, "FL\0", "FR\0", "BL\0", "BR\0"
-			, "A4\0"};
+			, "A4\0"}; // THERES SOME BUFFER OVERFLOW HAPPENING OR STH, THE FIRST 4 ELEMENTS ARE OVERWRITTEN. I CANT FIND IT SO LOL.
 
 	Command cmd;
 
@@ -984,18 +1371,18 @@ void execute_command_thread(void* args){
 				tmp[cmd.command_len] = '\0';
 				sscanf(tmp, "%s %d", command, &value);
 
-
 				// REDUCE BY A CALIBRATED ERROR. THIS WILL LIKELY NEED TO CHANGE IN THE FUTURE TODO:
 				// TEMP HARDCODE IT TO STOP 2cm early to prevent overshooting.
 				//forward_error = 15;
 				forward_error = 0;
+
 				if (value > forward_error * 2) { // only minus if the distance is significant enough to maybe cause overshootin
 					value -= forward_error;
 				}
 
 				display(tmp, 3);
 				//send(command);
-				if (strcmp(command, commands[0]) == 0 ){ //FWD
+				if (strcmp(command,"FW") == 0 ){ //FWD
 
 					/*
 					for(int i = 600; i< 4000; i += 200){
@@ -1006,18 +1393,12 @@ void execute_command_thread(void* args){
 
 					continue;
 					*/
-					set_speed(SPEED_SLOW, SPEED_SLOW);
-					straighten_flag = 1;
-					move_by_dist(1, value - errors[0]); // -5 // OVERSHOOT BY ~5MM
-					straighten_flag = 0;
+					fw(value);
 				}
-				if (strcmp(command, commands[1]) == 0){ //BCK
-					set_speed(SPEED_SLOW, SPEED_SLOW);
-					straighten_flag = 1;
-					move_by_dist(2, value - errors[1]); //+18 // for some reason, the robot is always short by 2cm.. so lol
-					straighten_flag = 0;
+				if (strcmp(command, "BW") == 0){ //BCK
+					bw(value);
 				}
-				if (strcmp(command, commands[2]) == 0){ //LFT
+				if (strcmp(command,  "LFT") == 0){ //LFT
 					turn_flag = value; //TODO: change to left
 					osDelay(1000);
 				}
@@ -1029,50 +1410,10 @@ void execute_command_thread(void* args){
 				}
 				if (strcmp(command, commands[5]) == 0){ //FL
 					//set_speed(SPEED_SLOW, SPEED_NORM);
-					set_speed(SPEED_SLOW /2  , SPEED_SLOW);
-					turn_flag = SERVO_LEFT;
-					osDelay(500); // wait for the servo to turn
-
-					//move_by_dist(1, value - errors[2]); // this line treats value as a dist
-
-					target_angle = turned_angle + value;
-					move_flag = 1;
-
-					while (turned_angle < target_angle - angle_errors[0]) {
-						/*
-						// Slow down when approaching target
-						if (turned_angle > target_angle - 20 ){
-							motor_speed = SPEED_SLOW;
-						}
-						else {
-						*/
-						osDelay(1);
-					}
-					move_flag = 0; //stop
-					osDelay(100); //wait for inertia
-					turn_flag = SERVO_STRAIGHT;
-
+					fl(value, 1);
 				}
 				if (strcmp(command, commands[6]) == 0){ //FR
-					set_speed(SPEED_SLOW, SPEED_SLOW / 2);
-
-					turn_flag = SERVO_RIGHT;
-					osDelay(500); // wait for the servo to turn
-
-					/* this line treats value as a dist
-					move_by_dist(1, value - errors[3]); //-25 // 20 to 25
-
-					*/
-					target_angle = turned_angle - value;
-					move_flag = 1;
-
-					while (turned_angle > target_angle + angle_errors[1]){ // turning right makes gyro go negative
-						osDelay(1);
-					}
-					move_flag = 0;
-					osDelay(100); //wait for inertia
-					turn_flag = SERVO_STRAIGHT;
-
+					fr(value, 1);
 					/* Already forcing slow speed
 					while (turned_angle > target_angle) {
 						// Slow down when approaching target
@@ -1163,7 +1504,13 @@ void execute_command_thread(void* args){
 				}
 				if (strcmp(command, commands[9]) == 0){ //A4
 					// we get 2mins to calibrate the bot, so ill just hijack this thread to do my calibration
-					calibrate();
+					//calibrate();
+					//task2();
+					send("i am here");
+					float u_dist = check_ultrasonic();
+					sprintf(buf, "DIST: %d!!!", (int)u_dist);
+
+					send(buf);
 					/*
 					// THIS IS FL BUT VALUE IS DEGREE TURN NOT DIST
 					turn(SERVO_LEFT);
@@ -1251,6 +1598,9 @@ int main(void)
 
   pid_init(&pidMatch, Kp_match, Ki_match, Kd_match);
 
+  // ULTRAONIC
+  HAL_TIM_Base_Start(&htim1);
+
   // SERVO
   HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
 
@@ -1290,7 +1640,7 @@ int main(void)
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
 
-  commandQueue = xQueueCreate(2, sizeof(Command));
+  commandQueue = xQueueCreate(20, CMD_LEN);
   /* --- 强行测试代�?开始 --- */
   // 确�?队列已�?创建好了 (commandQueue = xQueueCreate...)
 
@@ -1313,72 +1663,7 @@ int main(void)
   turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
   parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
   executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
-
-  /* Start scheduler */
-  osKernelStart();
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
-  /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-
-  /* creation of EncoderTask */
-  EncoderTaskHandle = osThreadNew(encoder, NULL, &EncoderTask_attributes);
-
-  /* creation of readICMTask */
-  readICMTaskHandle = osThreadNew(readICM, NULL, &readICMTask_attributes);
-
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  oledTaskHandle = osThreadNew(display_thread, NULL, &oledTask_attributes);
-  moveTaskHandle = osThreadNew(testMoveThread, NULL, &moveTask_attributes);
-  turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
-  parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
-  executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
-
-  /* Start scheduler */
-  osKernelStart();
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
-  /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-
-  /* creation of EncoderTask */
-  EncoderTaskHandle = osThreadNew(encoder, NULL, &EncoderTask_attributes);
-
-  /* creation of readICMTask */
-  readICMTaskHandle = osThreadNew(readICM, NULL, &readICMTask_attributes);
-
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  oledTaskHandle = osThreadNew(display_thread, NULL, &oledTask_attributes);
-  moveTaskHandle = osThreadNew(testMoveThread, NULL, &moveTask_attributes);
-  turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
-  parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
-  executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
-
-  /* Start scheduler */
-  osKernelStart();
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
-  /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-
-  /* creation of EncoderTask */
-  EncoderTaskHandle = osThreadNew(encoder, NULL, &EncoderTask_attributes);
-
-  /* creation of readICMTask */
-  readICMTaskHandle = osThreadNew(readICM, NULL, &readICMTask_attributes);
-
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  oledTaskHandle = osThreadNew(display_thread, NULL, &oledTask_attributes);
-  moveTaskHandle = osThreadNew(testMoveThread, NULL, &moveTask_attributes);
-  turnTaskHandle = osThreadNew(testTurnThread, NULL, &turnTask_attributes);
-  parseCommandTaskHandle = osThreadNew(parse_command_thread, NULL, &parseCommandTask_attributes);
-  executeCommandTaskHandle = osThreadNew(execute_command_thread, NULL, &executeCommandTask_attributes);
+  ultrasonicTaskHandle = osThreadNew(ultrasonic_thread, NULL, &ultrasonicTask_attributes);
 
   /* Start scheduler */
   osKernelStart();
@@ -1495,16 +1780,14 @@ static void MX_TIM1_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
+  htim1.Init.Prescaler = 15;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 7199;
+  htim1.Init.Period = 65535;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -1517,46 +1800,15 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN TIM1_Init 2 */
 
   /* USER CODE END TIM1_Init 2 */
-  HAL_TIM_MspPostInit(&htim1);
 
 }
 
@@ -1905,6 +2157,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOD, OLED_DC_Pin_Pin|OLED_RES_Pin_Pin|OLED_SDA_Pin_Pin|OLED_SCL_Pin_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(TriggerPin_GPIO_Port, TriggerPin_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(Buzz_Pin_GPIO_Port, Buzz_Pin_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : LED3_Pin */
@@ -1927,12 +2182,29 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : EchoPin_Pin */
+  GPIO_InitStruct.Pin = EchoPin_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(EchoPin_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : TriggerPin_Pin */
+  GPIO_InitStruct.Pin = TriggerPin_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(TriggerPin_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pin : Buzz_Pin_Pin */
   GPIO_InitStruct.Pin = Buzz_Pin_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(Buzz_Pin_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
 }
 
@@ -2251,8 +2523,8 @@ void readICM(void *argument)
 	//display(theta, 1);
 	turned_angle = (int) theta;
 
-	sprintf(buf,"%d", turned_angle);
-	display(buf, 1);
+	//sprintf(buf,"%d", turned_angle);
+	//display(buf, 1);
 
 	//sprintf(buf2, "%d", gyro_z_raw);
 	//display(buf2, 1);

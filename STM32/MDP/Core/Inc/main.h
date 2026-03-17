@@ -71,6 +71,11 @@ void Error_Handler(void);
 #define OLED_SCL_Pin_GPIO_Port GPIOD
 #define Left_IR_Pin GPIO_PIN_6
 #define Left_IR_GPIO_Port GPIOC
+#define EchoPin_Pin GPIO_PIN_7
+#define EchoPin_GPIO_Port GPIOC
+#define EchoPin_EXTI_IRQn EXTI9_5_IRQn
+#define TriggerPin_Pin GPIO_PIN_8
+#define TriggerPin_GPIO_Port GPIOC
 #define Right_IR_Pin GPIO_PIN_9
 #define Right_IR_GPIO_Port GPIOC
 #define Buzz_Pin_Pin GPIO_PIN_8
