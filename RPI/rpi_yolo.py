@@ -14,11 +14,6 @@ print("[RPI_YOLO] Model ready.")
 
 
 def infer(frame: np.ndarray, obstacle_id: str) -> str | None:
-    """
-    Run YOLO inference on a decoded frame.
-    Returns class_id string (e.g. "38" or "39"), or None if no detection.
-    Manages best-confidence file saving per obstacle_id.
-    """
     results = _model(frame, conf=0.5)
 
     if len(results[0].boxes) == 0:
@@ -61,7 +56,6 @@ def infer(frame: np.ndarray, obstacle_id: str) -> str | None:
 
 
 def _find_existing_detection(obstacle_id: str):
-    """Return (filename, confidence) of existing detection for this obstacle, or (None, -1)."""
     for name in os.listdir(OUTPUT_DIR):
         if name.startswith(f"{obstacle_id}_detection_") and name.endswith(".jpg"):
             try:
@@ -73,7 +67,6 @@ def _find_existing_detection(obstacle_id: str):
 
 
 def _save_no_detect(frame: np.ndarray, obstacle_id: str):
-    """Save no-detect image only if no detection file already exists for this obstacle."""
     detection_exists = any(
         name.startswith(f"{obstacle_id}_detection_") and name.endswith(".jpg")
         for name in os.listdir(OUTPUT_DIR)

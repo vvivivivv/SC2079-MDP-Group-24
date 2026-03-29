@@ -1,21 +1,18 @@
 from queue import Queue
 import bluetooth as bt
 import socket
-import sys
 import subprocess
 import json
 import time
 import os
-from RPI.constants import *
 
 class AndroidInterface:
-    def __init__(self, RPiMain):
-        self.RPiMain = RPiMain
-        self.host = RPI_IP
-        self.uuid = BT_UUID
+    def __init__(self, RPI):
+        self.RPI = RPI
+        self.uuid = "00001101-0000-1000-8000-00805F9B34FB" 
         self.msg_queue = Queue()
-        self.socket = None  # Initialize socket as None
-        self.client_socket = None  # Initialize client_socket as None
+        self.socket = None 
+        self.client_socket = None  
 
     def connect(self):
         print("[Android] Starting Bluetooth connection process...")
@@ -41,27 +38,23 @@ class AndroidInterface:
         try:
             self.socket.bind(("", 1))  
             self.port = 1
-            print("[Android] BT socket bound to RFCOMM channel 1")
-
+            print("[Android] Bind to RFCOMM channel 1")
             self.socket.listen(128)
-
-            # Advertise Bluetooth service
             bt.advertise_service(self.socket, "Group24", service_id=self.uuid,
                                service_classes=[self.uuid, bt.SERIAL_PORT_CLASS],
                                profiles=[bt.SERIAL_PORT_PROFILE])
             print("[Android] Waiting for Android connection...")
-            time.sleep(3)  # Delay for SDP propagation
+            time.sleep(2)  
 
             self.client_socket, self.client_info = self.socket.accept()
-            print("[Android] Accepted connection from", self.client_info)
+            print("[Android] Connected to", self.client_info)
 
         except Exception as e:
-            print("[Android] ERROR: connection failed -", str(e))
-            self.disconnect()  # Clean up on failure
-            raise  # Re-raise to allow caller to handle
+            print("[Android] Connection failed:", str(e))
+            self.disconnect()  
+            raise 
 
     def disconnect(self):
-        # Close the Bluetooth sockets
         try:
             if self.client_socket:
                 self.client_socket.close()
@@ -70,26 +63,21 @@ class AndroidInterface:
                 bt.stop_advertising(self.socket)
                 self.socket.close()
                 self.socket = None
-            print("[Android] Disconnected from Android successfully.")
+            print("[Android] Disconnected successfully.")
         except Exception as e:
-            print("[Android] ERROR: Failed to disconnect from Android -", str(e))
+            print("[Android] Failed to disconnect", str(e))
 
     def reconnect(self):
-        # Disconnect and then connect again
         self.disconnect()
         self.connect()
 
     def listen(self):
-        buffer = b""  # Buffer to accumulate incoming data
+        buffer = b"" 
         last_received = time.time()
-        MAX_BUFFER_SIZE = 16384 
-        TIMEOUT = 5  
         while True:
             try:
-                # Receive data from the Bluetooth socket
-                chunk = self.client_socket.recv(BT_BUFFER_SIZE)
+                chunk = self.client_socket.recv(2048)
                 if not chunk:
-                    print("[Android] Android disconnected remotely. Reconnecting...")
                     self.reconnect()
                     buffer = b""
                     last_received = time.time()
@@ -97,10 +85,8 @@ class AndroidInterface:
 
                 buffer += chunk
                 last_received = time.time()
-                print("[Android] Received chunk of size:", len(chunk), "Total buffer size:", len(buffer))
-                print("[Android] Buffer contents (hex):", buffer.hex()[:200])  
 
-                if len(buffer) > MAX_BUFFER_SIZE:
+                if len(buffer) > 16384 :
                     print("[Android] ERROR: Buffer size exceeds maximum, clearing buffer")
                     buffer = b""
                     last_received = time.time()
@@ -131,13 +117,13 @@ class AndroidInterface:
                         self.RPiMain.PC.handle_fastest_path(parsedMsg)
                         print("[Android] FASTEST_PATH/START_TASK:", decodedMsg)
                     else:
-                        print("[Android] WARNING: Unrecognised message type:", msg_type)
+                        print("[Android] Error:", msg_type)
 
                     buffer = b""  
                     last_received = time.time()
 
                 except UnicodeDecodeError as e:
-                    if time.time() - last_received > TIMEOUT:
+                    if time.time() - last_received > 5:
                         print("[Android] Timeout Error")
                         buffer = b""
                         last_received = time.time()
@@ -150,16 +136,13 @@ class AndroidInterface:
                 last_received = time.time()
 
     def send(self):
-        # Continuously send messages to Android
         while True: 
             message = self.msg_queue.get()
             exception = True
             while exception: 
                 try:
                     self.client_socket.sendall(message)
-                    print("[Android] Write to Android: " + message.decode("utf-8")[:MSG_LOG_MAX_SIZE])
                 except Exception as e:
-                    print("[Android] ERROR: Failed to write to Android -", str(e))
                     self.reconnect() 
                 else:
                     exception = False  
