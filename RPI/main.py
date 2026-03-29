@@ -2,80 +2,65 @@ from threading import Thread
 from Android import AndroidInterface
 from PC import PCInterface
 from stm import STMInterface
-from RPI.constants import STM_GYRO_RESET_COMMAND
+from upload_image import upload_images
 import json
 
-# Total Integration
-class RPiMain:
-    def __init__(self, task2):
-        # Initialize interfaces
+class RPITask:
+    def __init__(self, task):
         self.Android = AndroidInterface(self)
         self.PC = PCInterface(self)
-        self.STM = STMInterface(self, task2=task2)
+        self.STM = STMInterface(self, task=task)
 
-    def connect_components(self):
-        # Connect all components
+    def connect(self):
         self.Android.connect()
-        #self.PC.connect()
         self.STM.connect()
 
-    def cleanup(self):
-        # Disconnect from all components
+    def disconnect(self):
         self.Android.disconnect()
         self.PC.disconnect()
         self.STM.disconnect()
 
-    def forward_algo_path_to_android(self, path_data):
-        """
-        Forward the algo path JSON to Android.
-        """
+    def send_algo(self, path):
         message = {
             "type": "PATH",
-            "data": path_data
+            "data": path
         }
         if hasattr(self, "Android"):
             self.Android.msg_queue.put(json.dumps(message).encode("utf-8"))
-            print("[RPiMain] Forwarded algo path to Android")
+            print("[RPI] Forwarded algo path to Android")
 
     def run(self):
-        print("[RPiMain] Starting RPiMain...")
+        print("[RPI] Starting RPI...")
 
-        # Connect components
-        self.connect_components()
-        print("[RPiMain] Components connected successfully")
+        self.connect()
+        print("[RPI] Components connected successfully")
 
-        # Create threads for sending messages
+        # Create threads 
         Android_send = Thread(target=self.Android.send, name="Android_send_thread")
         STM_send = Thread(target=self.STM.send, name="STM_send_thread")
-
-        # Create threads for receiving messages
         Android_listen = Thread(target=self.Android.listen, name="Android_listen_thread")
 
         # Start sending threads
         Android_send.start()
         STM_send.start()
-        print("[RPiMain] Sending threads started successfully")
-
-        # Start listening threads
         Android_listen.start()
-        print("[RPiMain] Listening threads started successfully")
 
         # Wait for threads to end
         Android_send.join()
         STM_send.join()
         Android_listen.join()
 
-        print("[RPiMain] All threads concluded, cleaning up...")
+        print("[RPI] All threads concluded, cleaning up...")
+        upload_images() 
+        self.disconnect()
 
-        self.cleanup()
-
-        print("[RPiMain] Exiting RPiMain...")
+        print("[RPI] Exiting RPI...")
 
 if __name__ == "__main__":
-    rpi = RPiMain(True)
+    rpi = RPITask(True)
     try:
         rpi.run()
     except KeyboardInterrupt:
-        print("[RPiMain] KeyboardInterrupt caught, cleaning up...")
-        rpi.cleanup()
-        print("[RPiMain] Cleanup complete, exiting.")
+        print("[RPI] KeyboardInterrupt")
+        rpi.disconnect()
+        print("[RPI] Exiting")
